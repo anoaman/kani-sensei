@@ -2,5 +2,9 @@
   "version": 2,
   "builds": [
     { "src": "api/*.py", "use": "@vercel/python" }
+  ],
+  "routes": [
+    { "src": "/api/tick", "dest": "/api/tick.py" },
+    { "src": "/api/telegram_webhook", "dest": "/api/telegram_webhook.py" }
   ]
 }
