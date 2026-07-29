@@ -1,1 +1,4 @@
-# No external dependencies — pure Python stdlib
+# No external dependencies — pure Python stdlib.
+# Supabase writes in api/sync.py go through PostgREST over urllib, so
+# supabase-py is intentionally NOT required (keeps cold starts light and
+# matches the zero-dependency nudge bot).
