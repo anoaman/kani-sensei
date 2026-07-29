@@ -82,10 +82,12 @@ def build_decay_map(rows, now=None, item_limit=100):
         summary = levels.setdefault(item["level"], {
             "level": item["level"], "items": 0, "high": 0, "medium": 0,
             "low": 0, "due": 0, "accuracy_total": 0, "accuracy_count": 0,
+            "score_total": 0,
         })
         summary["items"] += 1
         summary[item["band"]] += 1
         summary["due"] += int(item["due"])
+        summary["score_total"] += item["decay_score"]
         if item["accuracy"] is not None:
             summary["accuracy_total"] += item["accuracy"]
             summary["accuracy_count"] += 1
@@ -93,11 +95,12 @@ def build_decay_map(rows, now=None, item_limit=100):
     for summary in levels.values():
         count = summary.pop("accuracy_count")
         total = summary.pop("accuracy_total")
+        score_total = summary.pop("score_total")
         summary["accuracy"] = round(total / count, 1) if count else None
-        summary["risk"] = round((summary["high"] * 100 + summary["medium"] * 45) / summary["items"]) if summary["items"] else 0
+        summary["risk"] = round(score_total / summary["items"]) if summary["items"] else 0
 
     level_list = sorted(levels.values(), key=lambda level: (-level["risk"], level["level"]))
-    suggested = [level["level"] for level in level_list if level["high"]][:5]
+    suggested = [level["level"] for level in level_list if level["risk"] >= 30][:5]
     return {
         "generated_at": (now or datetime.now(timezone.utc)).isoformat(),
         "signal": "accuracy + current SRS stage + currently due",
