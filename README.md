@@ -8,6 +8,9 @@ WaniKani nudge bot — sends Telegram messages when reviews are piling up.
 |---|---|---|---|
 | `/api/tick` | POST | `X-Cron-Secret` header | Scheduler entry point — check window, fetch WK, nudge if needed |
 | `/api/telegram_webhook` | POST | Telegram IP | `/status` command — on-demand snapshot |
+| `/api/sync` | POST | `X-Cron-Secret` header | Daily WK → Neon sync (Phase 0) |
+| `/api/decay` | GET | `X-Cron-Secret` header | Decay Map — what rotted (Phase 1) |
+| `/api/runway` | GET | `X-Cron-Secret` header | Burn-down plan + recovery date (Phase 3) |
 
 ## Nudge windows (WIB)
 

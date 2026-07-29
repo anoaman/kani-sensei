@@ -3,8 +3,9 @@
   "routes": [
     { "src": "/api/tick", "dest": "/api/tick.py" },
     { "src": "/api/telegram_webhook", "dest": "/api/telegram_webhook.py" },
-    { "src": "/api/sync", "dest": "/api/sync.py" }
-    ,{ "src": "/api/decay", "dest": "/api/decay.py" }
+    { "src": "/api/sync", "dest": "/api/sync.py" },
+    { "src": "/api/decay", "dest": "/api/decay.py" },
+    { "src": "/api/runway", "dest": "/api/runway.py" }
   ],
   "functions": {
     "api/*.py": {
