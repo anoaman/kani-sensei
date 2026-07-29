@@ -1,7 +1,7 @@
 # Kani Sensei Platform — Phase 0: Data Spine
 
 Phase 0 builds only the shared data spine. No user-facing features yet. It gives
-the four modules (Decay Map, Warm-Up Quiz, Runway, Nudge Bot) one Turso-backed
+the four modules (Decay Map, Warm-Up Quiz, Runway, Nudge Bot) one Neon-backed
 snapshot of your WaniKani state, refreshed daily.
 
 ## What shipped
@@ -9,18 +9,18 @@ snapshot of your WaniKani state, refreshed daily.
 | File | Purpose |
 |------|---------|
 | `shared/wanikani_client.py` | Reusable WK client: paginated `/subjects`, `/review_statistics`, `/assignments`, `/user`. Handles 429 backoff + retries. Pure stdlib. |
-| `shared/turso.py` | Minimal Turso/libSQL client over the HTTP pipeline (`/v2/pipeline`). `execute` / `batch` / `executemany`. Pure stdlib — no native libsql dep. |
-| `migrations/000_data_spine.sql` | SQLite/libSQL schema: `wk_subjects`, `wk_review_stats`, `wk_assignments`, `sync_runs`. Idempotent upserts on primary key. |
-| `api/sync.py` | Daily sync job. `X-Cron-Secret`-protected. Pulls WK → upserts Turso → writes a `sync_runs` audit row. |
-| `requirements.txt` | Unchanged (still stdlib). Turso writes use the libSQL HTTP pipeline over urllib — no libsql client. |
+| `shared/neon.py` | Minimal Neon/Postgres client using `psycopg`. Disables prepared statements for Neon pooled connections. |
+| `migrations/000_data_spine.sql` | Postgres schema: `wk_subjects`, `wk_review_stats`, `wk_assignments`, `sync_runs`. Idempotent upserts on primary key. |
+| `api/sync.py` | Daily sync job. `X-Cron-Secret`-protected. Pulls WK → upserts Neon → writes a `sync_runs` audit row. |
+| `requirements.txt` | Adds `psycopg[binary]` for Postgres connectivity on Vercel. |
 
 **Untouched:** `api/tick.py`, `api/telegram_webhook.py`. The Nudge Bot keeps working.
 
-## Why Turso (not Supabase)
+## Why Neon (not Supabase/Firebase)
 
-Moved off Supabase per Kibz. Turso (libSQL) is SQLite-compatible, serverless-native,
-and talked to here purely over its HTTP pipeline — zero native dependencies, so
-cold starts stay light and it matches the stdlib nudge bot exactly.
+Moved off Supabase per Kibz. Neon keeps the data relational, which fits subjects,
+assignments, review stats, sync audit rows, and the Decay Map queries much better
+than Firebase/Firestore. It also stays serverless-friendly on Vercel.
 
 ## Env vars to set (Vercel + `.env.local`)
 
@@ -29,21 +29,16 @@ Already present:
 - `CRON_SECRET`
 
 New for Phase 0:
-- `TURSO_DATABASE_URL` — e.g. `libsql://kani-sensei-<org>.turso.io` (the client also
-  accepts the `https://…` form)
-- `TURSO_AUTH_TOKEN` — DB auth token from `turso db tokens create <db>`
+- `DATABASE_URL` — Neon pooled connection string (`-pooler` host), with SSL required
+  - In `.env.local`, wrap it in quotes because the URL contains `&`:
+    `DATABASE_URL='postgresql://...sslmode=require&channel_binding=require'`
 
 ## Setup
 
-1. **Create the Turso DB** (free tier):
-   ```bash
-   turso db create kani-sensei
-   turso db show kani-sensei --url          # -> TURSO_DATABASE_URL
-   turso db tokens create kani-sensei       # -> TURSO_AUTH_TOKEN
-   ```
+1. **Create the Neon DB** (free tier), project name `kani-sensei`, region Singapore/ap-southeast-1 if available.
 2. **Apply the migration:**
    ```bash
-   turso db shell kani-sensei < migrations/000_data_spine.sql
+   psql "$DATABASE_URL" -f migrations/000_data_spine.sql
    ```
 3. **Set env vars** in Vercel (Production) and locally in `.env.local`.
 4. **Run a sync:**

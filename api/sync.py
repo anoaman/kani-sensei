@@ -1,16 +1,13 @@
 """Kani Sensei platform — Phase 0 daily sync job.
 
 Pulls the WK subject catalog (bounded to the user's current level), review
-statistics, and assignments, then upserts them into Turso. Idempotent: every
+statistics, and assignments, then upserts them into Neon/Postgres. Idempotent: every
 table upserts on its primary key, so a daily re-run just refreshes the snapshot.
 Writes one sync_runs audit row (open 'running' -> close 'ok'/'error').
 
 Protected by X-Cron-Secret (same pattern as api/tick.py). Hit daily by cron-job.org.
 
-Turso writes go through the HTTP pipeline (shared/turso.py) over stdlib urllib —
-no native libsql dep, keeping this consistent with the zero-dependency codebase.
-
-Env required: WANIKANI_API_KEY, TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, CRON_SECRET
+Env required: WANIKANI_API_KEY, DATABASE_URL, CRON_SECRET
 """
 
 from http.server import BaseHTTPRequestHandler
@@ -21,15 +18,15 @@ from datetime import datetime, timezone
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.wanikani_client import WaniKaniClient
-from shared.turso import TursoClient
+from shared.neon import NeonClient
 
-CHUNK = 50  # statements per Turso pipeline call
+CHUNK = 100
 
 
 UPSERT_SUBJECT = """
 insert into wk_subjects
   (id, object_type, level, characters, slug, primary_meaning, readings, meanings, raw, synced_at)
-values (?,?,?,?,?,?,?,?,?,?)
+values (%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s)
 on conflict(id) do update set
   object_type=excluded.object_type, level=excluded.level, characters=excluded.characters,
   slug=excluded.slug, primary_meaning=excluded.primary_meaning, readings=excluded.readings,
@@ -39,7 +36,7 @@ on conflict(id) do update set
 UPSERT_STAT = """
 insert into wk_review_stats
   (subject_id, meaning_correct, meaning_incorrect, reading_correct, reading_incorrect, percentage_correct, updated_at)
-values (?,?,?,?,?,?,?)
+values (%s,%s,%s,%s,%s,%s,%s)
 on conflict(subject_id) do update set
   meaning_correct=excluded.meaning_correct, meaning_incorrect=excluded.meaning_incorrect,
   reading_correct=excluded.reading_correct, reading_incorrect=excluded.reading_incorrect,
@@ -49,7 +46,7 @@ on conflict(subject_id) do update set
 UPSERT_ASSIGN = """
 insert into wk_assignments
   (subject_id, srs_stage, available_at, unlocked_at, started_at, passed_at, burned_at, synced_at)
-values (?,?,?,?,?,?,?,?)
+values (%s,%s,%s,%s,%s,%s,%s,%s)
 on conflict(subject_id) do update set
   srs_stage=excluded.srs_stage, available_at=excluded.available_at, unlocked_at=excluded.unlocked_at,
   started_at=excluded.started_at, passed_at=excluded.passed_at, burned_at=excluded.burned_at,
@@ -101,11 +98,11 @@ def run_sync(wk_token, db):
     wk = WaniKaniClient(wk_token)
     now = _now_iso()
 
-    opened = db.batch([
-        ("insert into sync_runs (started_at, status) values (?, 'running')", [now]),
-        ("select last_insert_rowid() as id", []),
-    ])
-    run_id = opened[1]["rows"][0][0]
+    run_id = db.execute(
+        "insert into sync_runs (started_at, status) values (%s, 'running') returning id",
+        [now],
+        fetch=True,
+    )[0][0]
 
     try:
         level = wk.get_user().get("level") or 60
@@ -129,13 +126,13 @@ def run_sync(wk_token, db):
 
         counts = {"subjects": n_subjects, "review_stats": n_stats, "assignments": n_assign}
         db.execute(
-            "update sync_runs set status='ok', finished_at=?, counts=? where id=?",
+            "update sync_runs set status='ok', finished_at=%s, counts=%s::jsonb where id=%s",
             [_now_iso(), json.dumps(counts), run_id])
         return counts
     except Exception as e:
         try:
             db.execute(
-                "update sync_runs set status='error', finished_at=?, error=? where id=?",
+                "update sync_runs set status='error', finished_at=%s, error=%s where id=%s",
                 [_now_iso(), str(e), run_id])
         except Exception:
             pass
@@ -145,11 +142,10 @@ def run_sync(wk_token, db):
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         wk_token = os.environ.get("WANIKANI_API_KEY")
-        turso_url = os.environ.get("TURSO_DATABASE_URL")
-        turso_token = os.environ.get("TURSO_AUTH_TOKEN")
+        database_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
         cron_secret = os.environ.get("CRON_SECRET")
 
-        if not all([wk_token, turso_url, turso_token, cron_secret]):
+        if not all([wk_token, database_url, cron_secret]):
             print("[kani-sensei/sync] ERROR: missing required env vars", file=sys.stderr)
             self._respond(500, {"error": "missing_env_vars"})
             return
@@ -159,7 +155,7 @@ class handler(BaseHTTPRequestHandler):
             return
 
         try:
-            db = TursoClient(turso_url, turso_token)
+            db = NeonClient(database_url)
             counts = run_sync(wk_token, db)
         except Exception as e:
             print(f"[kani-sensei/sync] sync failed: {e}", file=sys.stderr)

@@ -1,4 +1,1 @@
-# No external dependencies — pure Python stdlib.
-# Turso writes in api/sync.py go through the libSQL HTTP pipeline over urllib
-# (shared/turso.py), so no native libsql client is required — keeps cold starts
-# light and matches the zero-dependency nudge bot.
+psycopg[binary]==3.2.9
