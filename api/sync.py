@@ -1,16 +1,16 @@
 """Kani Sensei platform — Phase 0 daily sync job.
 
-Pulls the WK subject catalog, review statistics, and assignments, then upserts
-them into Supabase. Idempotent: every table upserts on its primary key, so a
-daily re-run just refreshes the snapshot. Writes one sync_runs audit row.
+Pulls the WK subject catalog (bounded to the user's current level), review
+statistics, and assignments, then upserts them into Turso. Idempotent: every
+table upserts on its primary key, so a daily re-run just refreshes the snapshot.
+Writes one sync_runs audit row (open 'running' -> close 'ok'/'error').
 
 Protected by X-Cron-Secret (same pattern as api/tick.py). Hit daily by cron-job.org.
 
-Supabase writes go through PostgREST over stdlib urllib — no supabase-py needed,
-keeping this consistent with the zero-dependency codebase. Upserts use
-`Prefer: resolution=merge-duplicates` so the table primary key resolves conflicts.
+Turso writes go through the HTTP pipeline (shared/turso.py) over stdlib urllib —
+no native libsql dep, keeping this consistent with the zero-dependency codebase.
 
-Env required: WANIKANI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY, CRON_SECRET
+Env required: WANIKANI_API_KEY, TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, CRON_SECRET
 """
 
 from http.server import BaseHTTPRequestHandler
@@ -18,164 +18,138 @@ import os
 import sys
 import json
 from datetime import datetime, timezone
-import urllib.request
-import urllib.error
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.wanikani_client import WaniKaniClient
+from shared.turso import TursoClient
 
-BATCH = 500  # PostgREST upsert batch size
-
-
-# ---- Supabase (PostgREST) helpers -----------------------------------------
-
-def _sb_headers(service_key, prefer):
-    return {
-        "apikey": service_key,
-        "Authorization": f"Bearer {service_key}",
-        "Content-Type": "application/json",
-        "Prefer": prefer,
-    }
+CHUNK = 50  # statements per Turso pipeline call
 
 
-def sb_upsert(base_url, service_key, table, rows):
-    """Batch-upsert rows into a table. Conflict resolves on the primary key."""
-    if not rows:
-        return 0
-    url = f"{base_url}/rest/v1/{table}"
-    total = 0
-    for i in range(0, len(rows), BATCH):
-        chunk = rows[i:i + BATCH]
-        body = json.dumps(chunk).encode()
-        req = urllib.request.Request(
-            url, data=body, method="POST",
-            headers=_sb_headers(service_key, "resolution=merge-duplicates,return=minimal"),
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            resp.read()
-        total += len(chunk)
-    return total
+UPSERT_SUBJECT = """
+insert into wk_subjects
+  (id, object_type, level, characters, slug, primary_meaning, readings, meanings, raw, synced_at)
+values (?,?,?,?,?,?,?,?,?,?)
+on conflict(id) do update set
+  object_type=excluded.object_type, level=excluded.level, characters=excluded.characters,
+  slug=excluded.slug, primary_meaning=excluded.primary_meaning, readings=excluded.readings,
+  meanings=excluded.meanings, raw=excluded.raw, synced_at=excluded.synced_at
+"""
 
+UPSERT_STAT = """
+insert into wk_review_stats
+  (subject_id, meaning_correct, meaning_incorrect, reading_correct, reading_incorrect, percentage_correct, updated_at)
+values (?,?,?,?,?,?,?)
+on conflict(subject_id) do update set
+  meaning_correct=excluded.meaning_correct, meaning_incorrect=excluded.meaning_incorrect,
+  reading_correct=excluded.reading_correct, reading_incorrect=excluded.reading_incorrect,
+  percentage_correct=excluded.percentage_correct, updated_at=excluded.updated_at
+"""
 
-def sb_insert_returning(base_url, service_key, table, row):
-    """Insert one row and return it (used for the sync_runs open/close)."""
-    url = f"{base_url}/rest/v1/{table}"
-    body = json.dumps(row).encode()
-    req = urllib.request.Request(
-        url, data=body, method="POST",
-        headers=_sb_headers(service_key, "return=representation"),
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read())[0]
-
-
-def sb_patch(base_url, service_key, table, match_col, match_val, patch):
-    url = f"{base_url}/rest/v1/{table}?{match_col}=eq.{match_val}"
-    body = json.dumps(patch).encode()
-    req = urllib.request.Request(
-        url, data=body, method="PATCH",
-        headers=_sb_headers(service_key, "return=minimal"),
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        resp.read()
-
-
-# ---- WK payload -> table row mappers --------------------------------------
-
-def map_subject(item):
-    d = item["data"]
-    meanings = d.get("meanings", [])
-    primary = next((m["meaning"] for m in meanings if m.get("primary")), None)
-    return {
-        "id": item["id"],
-        "object_type": item["object"],
-        "level": d.get("level"),
-        "characters": d.get("characters"),
-        "slug": d.get("slug"),
-        "primary_meaning": primary,
-        "readings": d.get("readings", []),   # radicals have none
-        "meanings": meanings,
-        "raw": d,
-        "synced_at": _now_iso(),
-    }
-
-
-def map_review_stat(item):
-    d = item["data"]
-    return {
-        "subject_id": d.get("subject_id"),
-        "meaning_correct": d.get("meaning_correct"),
-        "meaning_incorrect": d.get("meaning_incorrect"),
-        "reading_correct": d.get("reading_correct"),
-        "reading_incorrect": d.get("reading_incorrect"),
-        "percentage_correct": d.get("percentage_correct"),
-        "updated_at": _now_iso(),
-    }
-
-
-def map_assignment(item):
-    d = item["data"]
-    return {
-        "subject_id": d.get("subject_id"),
-        "srs_stage": d.get("srs_stage"),
-        "available_at": d.get("available_at"),
-        "unlocked_at": d.get("unlocked_at"),
-        "started_at": d.get("started_at"),
-        "passed_at": d.get("passed_at"),
-        "burned_at": d.get("burned_at"),
-        "synced_at": _now_iso(),
-    }
+UPSERT_ASSIGN = """
+insert into wk_assignments
+  (subject_id, srs_stage, available_at, unlocked_at, started_at, passed_at, burned_at, synced_at)
+values (?,?,?,?,?,?,?,?)
+on conflict(subject_id) do update set
+  srs_stage=excluded.srs_stage, available_at=excluded.available_at, unlocked_at=excluded.unlocked_at,
+  started_at=excluded.started_at, passed_at=excluded.passed_at, burned_at=excluded.burned_at,
+  synced_at=excluded.synced_at
+"""
 
 
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+# ---- WK payload -> row-tuple mappers (order matches the UPSERT columns) ----
+
+def map_subject(item, now):
+    d = item["data"]
+    meanings = d.get("meanings", [])
+    primary = next((m["meaning"] for m in meanings if m.get("primary")), None)
+    return [
+        item["id"], item["object"], d.get("level"), d.get("characters"),
+        d.get("slug"), primary,
+        json.dumps(d.get("readings", []), ensure_ascii=False),
+        json.dumps(meanings, ensure_ascii=False),
+        json.dumps(d, ensure_ascii=False),
+        now,
+    ]
+
+
+def map_review_stat(item, now):
+    d = item["data"]
+    return [
+        d.get("subject_id"), d.get("meaning_correct"), d.get("meaning_incorrect"),
+        d.get("reading_correct"), d.get("reading_incorrect"),
+        d.get("percentage_correct"), now,
+    ]
+
+
+def map_assignment(item, now):
+    d = item["data"]
+    return [
+        d.get("subject_id"), d.get("srs_stage"), d.get("available_at"),
+        d.get("unlocked_at"), d.get("started_at"), d.get("passed_at"),
+        d.get("burned_at"), now,
+    ]
+
+
 # ---- core sync -------------------------------------------------------------
 
-def run_sync(wk_token, sb_url, sb_key):
+def run_sync(wk_token, db):
     wk = WaniKaniClient(wk_token)
+    now = _now_iso()
 
-    run = sb_insert_returning(sb_url, sb_key, "sync_runs", {"status": "running"})
-    run_id = run["id"]
+    opened = db.batch([
+        ("insert into sync_runs (started_at, status) values (?, 'running')", [now]),
+        ("select last_insert_rowid() as id", []),
+    ])
+    run_id = opened[1]["rows"][0][0]
 
     try:
-        subjects = wk.get_subjects()
+        level = wk.get_user().get("level") or 60
+        subjects = wk.get_subjects(levels=list(range(1, level + 1)))
         review_stats = wk.get_review_statistics()
         assignments = wk.get_assignments()
 
-        # Subjects must land first — review_stats/assignments FK to them.
-        n_subjects = sb_upsert(sb_url, sb_key, "wk_subjects",
-                               [map_subject(s) for s in subjects])
-
-        # Only keep stats/assignments whose subject we actually cached.
         known = {s["id"] for s in subjects}
-        n_stats = sb_upsert(sb_url, sb_key, "wk_review_stats",
-                            [map_review_stat(r) for r in review_stats
-                             if r["data"].get("subject_id") in known])
-        n_assign = sb_upsert(sb_url, sb_key, "wk_assignments",
-                             [map_assignment(a) for a in assignments
-                              if a["data"].get("subject_id") in known])
 
-        counts = {"subjects": n_subjects, "review_stats": n_stats,
-                  "assignments": n_assign}
-        sb_patch(sb_url, sb_key, "sync_runs", "id", run_id,
-                 {"status": "ok", "finished_at": _now_iso(), "counts": counts})
+        # Subjects first — stats/assignments reference them.
+        n_subjects = db.executemany(
+            UPSERT_SUBJECT, [map_subject(s, now) for s in subjects], CHUNK)
+        n_stats = db.executemany(
+            UPSERT_STAT,
+            [map_review_stat(r, now) for r in review_stats
+             if r["data"].get("subject_id") in known], CHUNK)
+        n_assign = db.executemany(
+            UPSERT_ASSIGN,
+            [map_assignment(a, now) for a in assignments
+             if a["data"].get("subject_id") in known], CHUNK)
+
+        counts = {"subjects": n_subjects, "review_stats": n_stats, "assignments": n_assign}
+        db.execute(
+            "update sync_runs set status='ok', finished_at=?, counts=? where id=?",
+            [_now_iso(), json.dumps(counts), run_id])
         return counts
     except Exception as e:
-        sb_patch(sb_url, sb_key, "sync_runs", "id", run_id,
-                 {"status": "error", "finished_at": _now_iso(), "error": str(e)})
+        try:
+            db.execute(
+                "update sync_runs set status='error', finished_at=?, error=? where id=?",
+                [_now_iso(), str(e), run_id])
+        except Exception:
+            pass
         raise
 
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         wk_token = os.environ.get("WANIKANI_API_KEY")
-        sb_url = os.environ.get("SUPABASE_URL")
-        sb_key = os.environ.get("SUPABASE_SERVICE_KEY")
+        turso_url = os.environ.get("TURSO_DATABASE_URL")
+        turso_token = os.environ.get("TURSO_AUTH_TOKEN")
         cron_secret = os.environ.get("CRON_SECRET")
 
-        if not all([wk_token, sb_url, sb_key, cron_secret]):
+        if not all([wk_token, turso_url, turso_token, cron_secret]):
             print("[kani-sensei/sync] ERROR: missing required env vars", file=sys.stderr)
             self._respond(500, {"error": "missing_env_vars"})
             return
@@ -185,7 +159,8 @@ class handler(BaseHTTPRequestHandler):
             return
 
         try:
-            counts = run_sync(wk_token, sb_url.rstrip("/"), sb_key)
+            db = TursoClient(turso_url, turso_token)
+            counts = run_sync(wk_token, db)
         except Exception as e:
             print(f"[kani-sensei/sync] sync failed: {e}", file=sys.stderr)
             self._respond(502, {"error": "sync_failed", "detail": str(e)})

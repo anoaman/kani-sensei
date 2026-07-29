@@ -1,10 +1,14 @@
 {
   "version": 2,
   "builds": [
-    { "src": "api/*.py", "use": "@vercel/python" }
+    { "src": "api/*.py", "use": "@vercel/python", "config": { "includeFiles": "shared/**" } }
   ],
   "routes": [
     { "src": "/api/tick", "dest": "/api/tick.py" },
-    { "src": "/api/telegram_webhook", "dest": "/api/telegram_webhook.py" }
-  ]
+    { "src": "/api/telegram_webhook", "dest": "/api/telegram_webhook.py" },
+    { "src": "/api/sync", "dest": "/api/sync.py" }
+  ],
+  "functions": {
+    "api/sync.py": { "maxDuration": 60 }
+  }
 }
