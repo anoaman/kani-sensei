@@ -53,6 +53,29 @@ on conflict(subject_id) do update set
   synced_at=excluded.synced_at
 """
 
+# Freeze today's SRS + accuracy so Decay Map can detect real stage drops.
+SNAPSHOT_TODAY = """
+insert into wk_assignment_snapshots
+  (snap_date, subject_id, srs_stage,
+   meaning_correct, meaning_incorrect, reading_correct, reading_incorrect)
+select
+  current_date,
+  a.subject_id,
+  a.srs_stage,
+  r.meaning_correct,
+  r.meaning_incorrect,
+  r.reading_correct,
+  r.reading_incorrect
+from wk_assignments a
+left join wk_review_stats r on r.subject_id = a.subject_id
+on conflict (snap_date, subject_id) do update set
+  srs_stage = excluded.srs_stage,
+  meaning_correct = excluded.meaning_correct,
+  meaning_incorrect = excluded.meaning_incorrect,
+  reading_correct = excluded.reading_correct,
+  reading_incorrect = excluded.reading_incorrect
+"""
+
 
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
@@ -124,7 +147,23 @@ def run_sync(wk_token, db):
             [map_assignment(a, now) for a in assignments
              if a["data"].get("subject_id") in known], CHUNK)
 
-        counts = {"subjects": n_subjects, "review_stats": n_stats, "assignments": n_assign}
+        n_snapshots = 0
+        try:
+            db.execute(SNAPSHOT_TODAY)
+            n_snapshots = db.execute(
+                "select count(*) from wk_assignment_snapshots where snap_date = current_date",
+                fetch=True,
+            )[0][0]
+        except Exception as snap_err:
+            # Snapshot table may not exist yet on a rolling deploy — sync still succeeds.
+            print(f"[kani-sensei/sync] snapshot skipped: {snap_err}", file=sys.stderr)
+
+        counts = {
+            "subjects": n_subjects,
+            "review_stats": n_stats,
+            "assignments": n_assign,
+            "snapshots_today": int(n_snapshots or 0),
+        }
         db.execute(
             "update sync_runs set status='ok', finished_at=%s, counts=%s::jsonb where id=%s",
             [_now_iso(), json.dumps(counts), run_id])

@@ -5,34 +5,40 @@ Query params:
   - daily_reviews (int, default 100, min 25): target reviews/day
   - include_new_lessons (bool, default false): include ~5 lessons/day cost
 
-Protected with X-Cron-Secret until the platform has user authentication.
-Returns the same shape as shared/runway.build_runway_plan().
+Auth: session cookie, Bearer, or X-Cron-Secret.
 """
 
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs, urlparse
-import json
 import os
 import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from shared.runway import fetch_runway_plan
+from shared.auth import is_authorized, query_params
+from shared.http_util import optional_bool, optional_int, respond
 from shared.neon import NeonClient
+from shared.runway import fetch_runway_plan
 
 
 class handler(BaseHTTPRequestHandler):
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin") or "*")
+        self.send_header("Access-Control-Allow-Credentials", "true")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Cron-Secret")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.end_headers()
+
     def do_GET(self):
-        secret = os.environ.get("CRON_SECRET")
-        if not secret or self.headers.get("X-Cron-Secret") != secret:
-            self._respond(401, {"error": "unauthorized"})
+        if not is_authorized(self.headers):
+            respond(self, 401, {"error": "unauthorized"})
             return
 
-        query = parse_qs(urlparse(self.path).query)
+        query = query_params(self.path)
         try:
-            daily_reviews = self._optional_int(query, "daily_reviews", default=100)
+            daily_reviews = optional_int(query, "daily_reviews", default=100)
             if daily_reviews is not None and daily_reviews < 0:
                 raise ValueError("daily_reviews must be non-negative")
-            include_new_lessons = self._optional_bool(query, "include_new_lessons")
+            include_new_lessons = optional_bool(query, "include_new_lessons")
             database_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
             if not database_url:
                 raise ValueError("DATABASE_URL is required")
@@ -45,36 +51,13 @@ class handler(BaseHTTPRequestHandler):
             msg = str(exc)
             if "invalid literal for int()" in msg:
                 msg = "daily_reviews must be an integer"
-            self._respond(400, {"error": msg})
+            respond(self, 400, {"error": msg})
             return
         except Exception as exc:
             print(f"[kani-sensei/runway] failed: {exc}", file=sys.stderr)
-            self._respond(502, {"error": "runway_failed"})
+            respond(self, 502, {"error": "runway_failed"})
             return
-        self._respond(200, plan)
-
-    @staticmethod
-    def _optional_int(query, key, default=None):
-        value = query.get(key, [None])[0]
-        if value in (None, ""):
-            return default
-        return int(value)
-
-    @staticmethod
-    def _optional_bool(query, key, default=False):
-        value = query.get(key, [None])[0]
-        if value in (None, ""):
-            return default
-        return str(value).lower() in ("1", "true", "yes", "on")
-
-    def _respond(self, status, body):
-        payload = json.dumps(body, ensure_ascii=False, default=str).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
+        respond(self, 200, plan)
 
     def log_message(self, *args):
         pass

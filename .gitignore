@@ -2,3 +2,9 @@
 .env
 .vercel
 .env*
+web/node_modules/
+web/dist/
+__pycache__/
+**/__pycache__/
+*.pyc
+

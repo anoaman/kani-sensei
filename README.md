@@ -6,11 +6,20 @@ WaniKani nudge bot — sends Telegram messages when reviews are piling up.
 
 | Endpoint | Method | Auth | Description |
 |---|---|---|---|
+| `/` | GET | cookie after login | Web UI — Decay Map, Runway, Warm-Up Quiz |
+| `/api/login` | POST | site password body | Issue session cookie |
+| `/api/logout` | POST | — | Clear session cookie |
+| `/api/me` | GET | cookie / secret | Auth status |
+| `/api/overview` | GET | cookie / secret | Decay + Runway dashboard payload |
+| `/api/quiz` | POST/GET | cookie / secret | Start warm-up or fetch session |
 | `/api/tick` | POST | `X-Cron-Secret` header | Scheduler entry point — check window, fetch WK, nudge if needed |
 | `/api/telegram_webhook` | POST | Telegram IP | `/status` command — on-demand snapshot |
 | `/api/sync` | POST | `X-Cron-Secret` header | Daily WK → Neon sync (Phase 0) |
-| `/api/decay` | GET | `X-Cron-Secret` header | Decay Map — what rotted (Phase 1) |
-| `/api/runway` | GET | `X-Cron-Secret` header | Burn-down plan + recovery date (Phase 3) |
+| `/api/decay` | GET | cookie / secret | Decay Map — what rotted (Phase 1) |
+| `/api/runway` | GET | cookie / secret | Burn-down plan + recovery date (Phase 3) |
+
+Site password for the UI: `SITE_PASSWORD` if set, otherwise `CRON_SECRET`.
+
 
 ## Nudge windows (WIB)
 
