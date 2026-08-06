@@ -48,7 +48,6 @@ where s.object_type = any(%s)
   and s.characters is not null
   and s.characters <> ''
   and s.level >= %s and s.level <= %s
-  and a.burned_at is null
 """
 
 QUIZ_POOL_QUERY_LEGACY = """
@@ -66,7 +65,6 @@ where s.object_type = any(%s)
   and s.characters is not null
   and s.characters <> ''
   and s.level >= %s and s.level <= %s
-  and (a.burned_at is null or a.subject_id is null)
 """
 
 
