@@ -3,7 +3,14 @@ import unittest
 from datetime import datetime, timezone, timedelta
 
 from shared.decay_map import build_decay_map, classify_item
-from shared.quiz import build_quiz, enrich_pool_row, normalize_object_types, sample_weighted
+from shared.quiz import (
+    QUIZ_POOL_QUERY,
+    QUIZ_POOL_QUERY_LEGACY,
+    build_quiz,
+    enrich_pool_row,
+    normalize_object_types,
+    sample_weighted,
+)
 
 
 NOW = datetime(2026, 7, 29, tzinfo=timezone.utc)
@@ -116,6 +123,31 @@ class QuizTests(unittest.TestCase):
         )
         self.assertEqual(quiz["object_types"], ["kanji"])
         self.assertTrue(all(q["object_type"] == "kanji" for q in quiz["questions"]))
+
+    def test_build_quiz_succeeds_with_sparse_low_level_pool(self):
+        # Regression: levels 1-2 are often mostly burned for advanced users,
+        # leaving only a handful of matching subjects. A quiz should still
+        # start whenever there are enough matching subjects for one
+        # multiple-choice question, instead of requiring the old flat
+        # minimum of 4 pool rows regardless of what's actually buildable.
+        names = ["One", "Two", "Three", "Four", "Five"]
+        readings = ["いち", "に", "さん", "よん", "ご"]
+        rows = [
+            pool_row(i, 1 + (i % 2), f"字{i}", names[i], readings[i], object_type="kanji")
+            for i in range(5)
+        ]
+        quiz = build_quiz(rows, min_level=1, max_level=2, count=10, seed=1)
+        self.assertGreaterEqual(quiz["question_count"], 1)
+        for q in quiz["questions"]:
+            self.assertEqual(len(q["choices"]), 4)
+            self.assertIn(q["correct_answer"], q["choices"])
+
+    def test_quiz_pool_queries_do_not_exclude_burned_subjects(self):
+        # The pool query used to require a.burned_at is null in the WHERE
+        # clause, which starves low-level ranges for users who have already
+        # burned those items (burned_at is still selected for scoring).
+        self.assertNotIn("burned_at is null", QUIZ_POOL_QUERY)
+        self.assertNotIn("burned_at is null", QUIZ_POOL_QUERY_LEGACY)
 
     def test_build_quiz_filters_to_radicals_meaning_only(self):
         rows = [

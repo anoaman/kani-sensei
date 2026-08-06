@@ -48,7 +48,6 @@ where s.object_type = any(%s)
   and s.characters is not null
   and s.characters <> ''
   and s.level >= %s and s.level <= %s
-  and a.burned_at is null
 """
 
 QUIZ_POOL_QUERY_LEGACY = """
@@ -66,7 +65,6 @@ where s.object_type = any(%s)
   and s.characters is not null
   and s.characters <> ''
   and s.level >= %s and s.level <= %s
-  and (a.burned_at is null or a.subject_id is null)
 """
 
 
@@ -316,7 +314,7 @@ def build_quiz(
         and item.get("type") in allowed
         and (item.get("primary_meaning") or item.get("primary_reading"))
     ]
-    if len(pool) < 4:
+    if not pool:
         raise ValueError("not enough subjects in this level range for a quiz")
 
     # Oversample then build until we have enough valid MC questions.
@@ -339,7 +337,7 @@ def build_quiz(
         if len(questions) >= count:
             break
 
-    if len(questions) < max(1, min(count, 4)):
+    if not questions:
         raise ValueError("could not build enough multiple-choice questions")
 
     session_id = str(uuid.uuid4())
