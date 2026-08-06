@@ -85,6 +85,28 @@ class QuizTests(unittest.TestCase):
             self.assertEqual(q["choices"].index(q["correct_answer"]), q["correct_index"])
             self.assertIn(q["prompt_type"], ("meaning", "reading"))
 
+    def test_build_quiz_uses_single_matching_subject(self):
+        rows = [pool_row(1, 1, "一", "One", "いち")]
+
+        quiz = build_quiz(rows, min_level=1, max_level=2, count=10, seed=7)
+
+        self.assertEqual(quiz["question_count"], 1)
+        self.assertEqual(quiz["questions"][0]["subject_id"], 1)
+        self.assertEqual(quiz["questions"][0]["choices"], [
+            quiz["questions"][0]["correct_answer"],
+        ])
+
+    def test_build_quiz_uses_all_matching_subjects_below_requested_count(self):
+        rows = [
+            pool_row(1, 1, "一", "One", "いち"),
+            pool_row(2, 2, "二", "Two", "に"),
+        ]
+
+        quiz = build_quiz(rows, min_level=1, max_level=2, count=10, seed=7)
+
+        self.assertEqual(quiz["question_count"], 2)
+        self.assertEqual({q["subject_id"] for q in quiz["questions"]}, {1, 2})
+
     def test_enrich_keeps_primary_reading(self):
         item = enrich_pool_row(pool_row(9, 4, "毎月", "Every Month", "まいつき"), now=NOW)
         self.assertEqual(item["primary_reading"], "まいつき")

@@ -234,9 +234,7 @@ def pick_distractors(target, pool, prompt_type, rng, k=3):
         if len(candidates) >= max(12, k * 4):
             break
 
-    if len(candidates) < k:
-        return []
-    return rng.sample(candidates, k)
+    return rng.sample(candidates, min(k, len(candidates)))
 
 
 def build_question(item, pool, prompt_type, rng):
@@ -250,9 +248,6 @@ def build_question(item, pool, prompt_type, rng):
             return None
 
     distractors = pick_distractors(item, pool, prompt_type, rng, k=3)
-    if len(distractors) < 3:
-        return None
-
     choices = distractors + [answer]
     rng.shuffle(choices)
     correct_index = choices.index(answer)
@@ -316,8 +311,8 @@ def build_quiz(
         and item.get("type") in allowed
         and (item.get("primary_meaning") or item.get("primary_reading"))
     ]
-    if len(pool) < 4:
-        raise ValueError("not enough subjects in this level range for a quiz")
+    if not pool:
+        raise ValueError("no matching subjects in this level range")
 
     # Oversample then build until we have enough valid MC questions.
     sample_size = min(len(pool), max(count * 3, count + 8))
@@ -339,8 +334,8 @@ def build_quiz(
         if len(questions) >= count:
             break
 
-    if len(questions) < max(1, min(count, 4)):
-        raise ValueError("could not build enough multiple-choice questions")
+    if not questions:
+        raise ValueError("could not build a question from the matching subjects")
 
     session_id = str(uuid.uuid4())
     avg_decay = round(sum(q["decay_score"] for q in questions) / len(questions), 1)
