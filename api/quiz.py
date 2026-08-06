@@ -69,11 +69,19 @@ class handler(BaseHTTPRequestHandler):
             modes = body.get("modes") or ["meaning", "reading"]
             if not isinstance(modes, list):
                 raise ValueError("modes must be a list")
+            object_types = body.get("object_types")
             if min_level < 1 or max_level > 60:
                 raise ValueError("levels must be between 1 and 60")
             if min_level > max_level:
                 raise ValueError("min_level cannot exceed max_level")
-            quiz = start_quiz(db, min_level, max_level, count=count, modes=modes)
+            quiz = start_quiz(
+                db,
+                min_level,
+                max_level,
+                count=count,
+                modes=modes,
+                object_types=object_types,
+            )
             respond(self, 200, quiz)
         except (TypeError, ValueError, KeyError) as exc:
             respond(self, 400, {"error": str(exc)})

@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timezone, timedelta
 
 from shared.decay_map import build_decay_map, classify_item
-from shared.quiz import build_quiz, enrich_pool_row, sample_weighted
+from shared.quiz import build_quiz, enrich_pool_row, normalize_object_types, sample_weighted
 
 
 NOW = datetime(2026, 7, 29, tzinfo=timezone.utc)
@@ -23,7 +23,11 @@ def pool_row(
     correct=5, incorrect=5, stage=2, object_type="vocabulary",
 ):
     meanings = [{"meaning": meaning, "primary": True, "accepted_answer": True}]
-    readings = [{"reading": reading, "primary": True, "accepted_answer": True}]
+    readings = (
+        [{"reading": reading, "primary": True, "accepted_answer": True}]
+        if reading
+        else []
+    )
     return (
         subject_id, level, object_type, characters, meaning,
         meanings, readings,
@@ -85,6 +89,54 @@ class QuizTests(unittest.TestCase):
         item = enrich_pool_row(pool_row(9, 4, "毎月", "Every Month", "まいつき"), now=NOW)
         self.assertEqual(item["primary_reading"], "まいつき")
         self.assertEqual(item["primary_meaning"], "Every Month")
+
+    def test_normalize_object_types_aliases(self):
+        self.assertEqual(normalize_object_types(["vocab"]), ["vocabulary"])
+        self.assertEqual(normalize_object_types(["radicals"]), ["radical"])
+        self.assertEqual(normalize_object_types(None), ["kanji", "vocabulary"])
+
+    def test_build_quiz_filters_to_kanji_only(self):
+        rows = []
+        for i in range(12):
+            rows.append(pool_row(
+                i, 10, f"漢{i}", f"Kanji{i}", f"かん{i}",
+                object_type="kanji", incorrect=6,
+            ))
+            rows.append(pool_row(
+                100 + i, 10, f"語{i}", f"Vocab{i}", f"ご{i}",
+                object_type="vocabulary", incorrect=9,
+            ))
+        quiz = build_quiz(
+            rows,
+            min_level=10,
+            max_level=10,
+            count=5,
+            seed=3,
+            object_types=["kanji"],
+        )
+        self.assertEqual(quiz["object_types"], ["kanji"])
+        self.assertTrue(all(q["object_type"] == "kanji" for q in quiz["questions"]))
+
+    def test_build_quiz_filters_to_radicals_meaning_only(self):
+        rows = [
+            pool_row(
+                i, 2, f"部{i}", f"Radical{i}", None,
+                object_type="radical", incorrect=7,
+            )
+            for i in range(12)
+        ]
+        quiz = build_quiz(
+            rows,
+            min_level=2,
+            max_level=2,
+            count=4,
+            seed=11,
+            modes=["meaning", "reading"],
+            object_types=["radical"],
+        )
+        self.assertEqual(quiz["object_types"], ["radical"])
+        self.assertTrue(all(q["object_type"] == "radical" for q in quiz["questions"]))
+        self.assertTrue(all(q["prompt_type"] == "meaning" for q in quiz["questions"]))
 
 
 class AuthTests(unittest.TestCase):

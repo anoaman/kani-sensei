@@ -15,6 +15,16 @@ from datetime import datetime, timezone
 from shared.decay_map import classify_item
 
 
+ALLOWED_OBJECT_TYPES = ("kanji", "vocabulary", "radical")
+DEFAULT_OBJECT_TYPES = ("kanji", "vocabulary")
+OBJECT_TYPE_ALIASES = {
+    "kanji": "kanji",
+    "vocabulary": "vocabulary",
+    "vocab": "vocabulary",
+    "radical": "radical",
+    "radicals": "radical",
+}
+
 QUIZ_POOL_QUERY = """
 select
     s.id, s.level, s.object_type, s.characters, s.primary_meaning,
@@ -34,7 +44,7 @@ left join lateral (
     order by snap.snap_date desc
     limit 1
 ) prev on true
-where s.object_type in ('kanji', 'vocabulary')
+where s.object_type = any(%s)
   and s.characters is not null
   and s.characters <> ''
   and s.level >= %s and s.level <= %s
@@ -52,12 +62,35 @@ select
 from wk_subjects s
 join wk_review_stats r on r.subject_id = s.id
 left join wk_assignments a on a.subject_id = s.id
-where s.object_type in ('kanji', 'vocabulary')
+where s.object_type = any(%s)
   and s.characters is not null
   and s.characters <> ''
   and s.level >= %s and s.level <= %s
   and (a.burned_at is null or a.subject_id is null)
 """
+
+
+def normalize_object_types(object_types=None):
+    """Normalize quiz category filters to WK object_type values."""
+    if object_types is None:
+        return list(DEFAULT_OBJECT_TYPES)
+    if isinstance(object_types, str):
+        object_types = [object_types]
+    if not isinstance(object_types, (list, tuple)):
+        raise ValueError("object_types must be a list")
+    cleaned = []
+    for raw in object_types:
+        key = str(raw or "").strip().casefold()
+        mapped = OBJECT_TYPE_ALIASES.get(key)
+        if mapped is None:
+            raise ValueError(
+                "object_types must be kanji, vocabulary, and/or radical"
+            )
+        if mapped not in cleaned:
+            cleaned.append(mapped)
+    if not cleaned:
+        raise ValueError("object_types must include at least one type")
+    return cleaned
 
 
 def _parse_json(value):
@@ -262,6 +295,7 @@ def build_quiz(
     modes=None,
     seed=None,
     now=None,
+    object_types=None,
 ):
     modes = modes or ["meaning", "reading"]
     modes = [m for m in modes if m in ("meaning", "reading")]
@@ -270,6 +304,8 @@ def build_quiz(
     if min_level > max_level:
         raise ValueError("min_level cannot exceed max_level")
     count = max(1, min(30, int(count)))
+    object_types = normalize_object_types(object_types)
+    allowed = set(object_types)
 
     rng = random.Random(seed)
     now = now or datetime.now(timezone.utc)
@@ -277,6 +313,7 @@ def build_quiz(
     pool = [
         item for item in pool
         if item.get("characters")
+        and item.get("type") in allowed
         and (item.get("primary_meaning") or item.get("primary_reading"))
     ]
     if len(pool) < 4:
@@ -313,6 +350,7 @@ def build_quiz(
         "max_level": max_level,
         "question_count": len(questions),
         "modes": modes,
+        "object_types": object_types,
         "created_at": now.isoformat(),
         "weighting": {
             "method": "decay_score^1.6 without replacement",
@@ -354,6 +392,7 @@ def persist_quiz(db, quiz):
             quiz["created_at"],
             json.dumps({
                 "modes": quiz["modes"],
+                "object_types": quiz.get("object_types") or list(DEFAULT_OBJECT_TYPES),
                 "weighting": quiz["weighting"],
             }),
         ],
@@ -389,15 +428,20 @@ def persist_quiz(db, quiz):
     return quiz
 
 
-def fetch_pool(db, min_level, max_level):
+def fetch_pool(db, min_level, max_level, object_types=None):
+    types = normalize_object_types(object_types)
+    params = [types, min_level, max_level]
     try:
-        return db.execute(QUIZ_POOL_QUERY, [min_level, max_level], fetch=True)
+        return db.execute(QUIZ_POOL_QUERY, params, fetch=True)
     except Exception:
-        return db.execute(QUIZ_POOL_QUERY_LEGACY, [min_level, max_level], fetch=True)
+        return db.execute(QUIZ_POOL_QUERY_LEGACY, params, fetch=True)
 
 
-def start_quiz(db, min_level, max_level, count=10, modes=None, seed=None):
-    rows = fetch_pool(db, min_level, max_level)
+def start_quiz(
+    db, min_level, max_level, count=10, modes=None, seed=None, object_types=None,
+):
+    object_types = normalize_object_types(object_types)
+    rows = fetch_pool(db, min_level, max_level, object_types=object_types)
     quiz = build_quiz(
         rows,
         min_level=min_level,
@@ -405,6 +449,7 @@ def start_quiz(db, min_level, max_level, count=10, modes=None, seed=None):
         count=count,
         modes=modes,
         seed=seed,
+        object_types=object_types,
     )
     persist_quiz(db, quiz)
     return {
@@ -413,6 +458,7 @@ def start_quiz(db, min_level, max_level, count=10, modes=None, seed=None):
         "max_level": quiz["max_level"],
         "question_count": quiz["question_count"],
         "modes": quiz["modes"],
+        "object_types": quiz["object_types"],
         "created_at": quiz["created_at"],
         "weighting": quiz["weighting"],
         "questions": [

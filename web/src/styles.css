@@ -378,6 +378,40 @@ select {
   margin-bottom: 1.25rem;
 }
 
+.category-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1.1rem;
+}
+
+.category-tabs button {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.45);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 0.45rem 0.95rem;
+  cursor: pointer;
+  transition: transform 0.18s ease, background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.category-tabs button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  color: var(--ink);
+  border-color: rgba(31, 122, 116, 0.35);
+}
+
+.category-tabs button.active {
+  background: rgba(31, 122, 116, 0.14);
+  color: var(--sea-deep);
+  border-color: rgba(31, 122, 116, 0.4);
+}
+
+.category-tabs button:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+
 .field {
   display: grid;
   gap: 0.35rem;

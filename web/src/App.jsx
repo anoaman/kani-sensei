@@ -1,12 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
 
-const VIEWS = [
-  { id: "home", label: "Home" },
-  { id: "decay", label: "Decay Map" },
-  { id: "runway", label: "Runway" },
-  { id: "quiz", label: "Warm-Up" },
+const CATEGORIES = [
+  { id: "vocab", label: "Vocab", objectTypes: ["vocabulary"] },
+  { id: "radicals", label: "Radicals", objectTypes: ["radical"] },
+  { id: "kanji", label: "Kanji", objectTypes: ["kanji"] },
 ];
+
+const VIEWS = [
+  { id: "home", label: "Home", path: "/" },
+  { id: "decay", label: "Decay Map", path: "/" },
+  { id: "runway", label: "Runway", path: "/" },
+  { id: "quiz", label: "Warm-Up", path: "/" },
+  { id: "kanji", label: "Kanji Test", path: "/kanji" },
+];
+
+function pathForView(viewId) {
+  return viewId === "kanji" ? "/kanji" : "/";
+}
+
+function viewFromPath(pathname) {
+  if (pathname === "/kanji" || pathname.startsWith("/kanji/")) return "kanji";
+  return "home";
+}
 
 function formatDate(value) {
   if (!value) return "—";
@@ -77,6 +93,9 @@ function Home({ data, onNavigate }) {
       <div className="hero-actions">
         <button className="primary-btn" onClick={() => onNavigate("quiz")}>
           Start warm-up
+        </button>
+        <button className="ghost-btn" onClick={() => onNavigate("kanji")}>
+          Kanji test
         </button>
         <button className="ghost-btn" onClick={() => onNavigate("decay")}>
           See decay map
@@ -265,11 +284,38 @@ function RunwayView({ data }) {
   );
 }
 
-function QuizView({ data }) {
+function CategoryTabs({ value, onChange, disabled }) {
+  return (
+    <div className="category-tabs" role="tablist" aria-label="Test category">
+      {CATEGORIES.map((category) => (
+        <button
+          key={category.id}
+          type="button"
+          role="tab"
+          aria-selected={value === category.id}
+          className={value === category.id ? "active" : ""}
+          disabled={disabled}
+          onClick={() => onChange(category.id)}
+        >
+          {category.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function QuizView({
+  data,
+  title = "Warm-Up Quiz",
+  blurb = "Multiple-choice drills weighted toward Decay Map pressure — get comfortable before you touch the real queue.",
+  defaultCategory = "vocab",
+  finishNote = "Warm-up complete. Take that feeling into the real reviews.",
+}) {
   const suggested = data?.decay?.summary?.suggested_levels || [];
   const defaultMin = suggested.length ? Math.min(...suggested) : 14;
   const defaultMax = suggested.length ? Math.max(...suggested) : 18;
 
+  const [category, setCategory] = useState(defaultCategory);
   const [minLevel, setMinLevel] = useState(defaultMin);
   const [maxLevel, setMaxLevel] = useState(defaultMax);
   const [count, setCount] = useState(10);
@@ -281,14 +327,26 @@ function QuizView({ data }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    setCategory(defaultCategory);
+  }, [defaultCategory]);
+
+  useEffect(() => {
     if (!session) {
       setMinLevel(defaultMin);
       setMaxLevel(defaultMax);
     }
   }, [defaultMin, defaultMax, session]);
 
+  useEffect(() => {
+    if (category === "radicals" && mode !== "meaning") {
+      setMode("meaning");
+    }
+  }, [category, mode]);
+
   const question = session?.questions?.[index] || null;
   const finished = feedback?.score?.finished;
+  const selectedCategory =
+    CATEGORIES.find((item) => item.id === category) || CATEGORIES[0];
 
   async function start() {
     setBusy(true);
@@ -296,12 +354,19 @@ function QuizView({ data }) {
     setFeedback(null);
     try {
       const modes =
-        mode === "both" ? ["meaning", "reading"] : mode === "meaning" ? ["meaning"] : ["reading"];
+        category === "radicals"
+          ? ["meaning"]
+          : mode === "both"
+            ? ["meaning", "reading"]
+            : mode === "meaning"
+              ? ["meaning"]
+              : ["reading"];
       const quiz = await api.startQuiz({
         min_level: Number(minLevel),
         max_level: Number(maxLevel),
         count: Number(count),
         modes,
+        object_types: selectedCategory.objectTypes,
       });
       setSession(quiz);
       setIndex(0);
@@ -346,16 +411,14 @@ function QuizView({ data }) {
     <section className="panel">
       <div className="section-head">
         <div>
-          <h2>Warm-Up Quiz</h2>
-          <p>
-            Multiple-choice drills weighted toward Decay Map pressure — get
-            comfortable before you touch the real queue.
-          </p>
+          <h2>{title}</h2>
+          <p>{blurb}</p>
         </div>
       </div>
 
       {!session ? (
         <div className="surface">
+          <CategoryTabs value={category} onChange={setCategory} />
           <div className="controls">
             <div className="field">
               <label>From</label>
@@ -389,10 +452,20 @@ function QuizView({ data }) {
             </div>
             <div className="field">
               <label>Focus</label>
-              <select value={mode} onChange={(e) => setMode(e.target.value)}>
-                <option value="both">Meaning + reading</option>
-                <option value="meaning">Meaning only</option>
-                <option value="reading">Reading only</option>
+              <select
+                value={category === "radicals" ? "meaning" : mode}
+                onChange={(e) => setMode(e.target.value)}
+                disabled={category === "radicals"}
+              >
+                {category === "radicals" ? (
+                  <option value="meaning">Meaning only</option>
+                ) : (
+                  <>
+                    <option value="both">Meaning + reading</option>
+                    <option value="meaning">Meaning only</option>
+                    <option value="reading">Reading only</option>
+                  </>
+                )}
               </select>
             </div>
             <button className="primary-btn" onClick={start} disabled={busy}>
@@ -413,8 +486,9 @@ function QuizView({ data }) {
         </div>
       ) : (
         <div className="quiz-stage surface">
+          <CategoryTabs value={category} onChange={() => {}} disabled />
           <div className="muted">
-            Question {index + 1} / {session.question_count}
+            {selectedCategory.label} · Question {index + 1} / {session.question_count}
             {feedback?.score
               ? ` · Score ${feedback.score.correct}/${feedback.score.total}`
               : ""}
@@ -473,11 +547,7 @@ function QuizView({ data }) {
             </div>
           ) : null}
 
-          {finished ? (
-            <p className="note">
-              Warm-up complete. Take that feeling into the real reviews.
-            </p>
-          ) : null}
+          {finished ? <p className="note">{finishNote}</p> : null}
           {error ? <div className="error">{error}</div> : null}
         </div>
       )}
@@ -487,9 +557,17 @@ function QuizView({ data }) {
 
 export default function App() {
   const [auth, setAuth] = useState(null);
-  const [view, setView] = useState("home");
+  const [view, setView] = useState(() => viewFromPath(window.location.pathname));
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState("");
+
+  function navigate(nextView) {
+    setView(nextView);
+    const nextPath = pathForView(nextView);
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({ view: nextView }, "", nextPath);
+    }
+  }
 
   async function refreshAuth() {
     try {
@@ -522,6 +600,14 @@ export default function App() {
     if (auth) loadOverview();
   }, [auth]);
 
+  useEffect(() => {
+    function onPopState() {
+      setView(viewFromPath(window.location.pathname));
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
   const syncNote = useMemo(() => {
     if (!data?.last_sync?.finished_at) return null;
     return `Last sync ${formatDate(data.last_sync.finished_at)}`;
@@ -547,7 +633,7 @@ export default function App() {
             <button
               key={item.id}
               className={view === item.id ? "active" : ""}
-              onClick={() => setView(item.id)}
+              onClick={() => navigate(item.id)}
             >
               {item.label}
             </button>
@@ -567,10 +653,27 @@ export default function App() {
 
       {loadError ? <div className="error" style={{ marginBottom: "1rem" }}>{loadError}</div> : null}
 
-      {view === "home" ? <Home data={data} onNavigate={setView} /> : null}
+      {view === "home" ? <Home data={data} onNavigate={navigate} /> : null}
       {view === "decay" ? <DecayView data={data} /> : null}
       {view === "runway" ? <RunwayView data={data} /> : null}
-      {view === "quiz" ? <QuizView data={data} /> : null}
+      {view === "quiz" ? (
+        <QuizView
+          data={data}
+          defaultCategory="vocab"
+          title="Warm-Up Quiz"
+          blurb="Multiple-choice drills weighted toward Decay Map pressure — pick Vocab, Radicals, or Kanji and get comfortable before the real queue."
+        />
+      ) : null}
+      {view === "kanji" ? (
+        <QuizView
+          key="kanji-test"
+          data={data}
+          defaultCategory="kanji"
+          title="Kanji Test"
+          blurb="Dedicated drills with the same warm-up mechanics. Starts on Kanji — switch to Vocab or Radicals whenever you want."
+          finishNote="Kanji test complete. Carry that clarity into reviews."
+        />
+      ) : null}
     </div>
   );
 }
