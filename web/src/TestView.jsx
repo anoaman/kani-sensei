@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
+import InspectCard from "./InspectCard.jsx";
 
 const FORMATS = [
   { id: "recall", label: "Type it", hint: "Same muscle as a real review" },
@@ -15,6 +16,26 @@ const POOLS = [
   { id: "burned", label: "Ghosts" },
   { id: "misses", label: "My misses" },
 ];
+
+function readQuery() {
+  const query = new URLSearchParams(window.location.search);
+  const min = Number(query.get("min"));
+  const max = Number(query.get("max"));
+  const count = Number(query.get("count"));
+  const types = (query.get("types") || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return {
+    min: Number.isFinite(min) && min >= 1 ? min : null,
+    max: Number.isFinite(max) && max >= 1 ? max : null,
+    count: Number.isFinite(count) && count >= 1 ? count : null,
+    pool: query.get("pool") || null,
+    kind: query.get("kind") || null,
+    go: query.get("go") === "1",
+    types: types.length ? types : null,
+  };
+}
 
 function ChipRow({ label, options, value, onChange, disabled }) {
   return (
@@ -40,7 +61,7 @@ function ChipRow({ label, options, value, onChange, disabled }) {
   );
 }
 
-function Recap({ score, verdict, comboBest, misses, onAgain, onRetryMisses, onHome }) {
+function Recap({ score, verdict, comboBest, misses, onAgain, onRetryMisses, onHome, onInspect }) {
   return (
     <div className="recap">
       <div className="recap-score">
@@ -53,16 +74,21 @@ function Recap({ score, verdict, comboBest, misses, onAgain, onRetryMisses, onHo
         <div className="miss-list">
           <strong>What still has teeth</strong>
           {misses.map((miss, index) => (
-            <div className="item" key={`${miss.characters}-${index}`}>
+            <button
+              type="button"
+              className="item item-btn"
+              key={`${miss.characters}-${index}`}
+              onClick={() => miss.subject_id && onInspect?.(miss.subject_id)}
+            >
               <div className="glyph">{miss.characters}</div>
               <div>
                 <div>{miss.correct_answer}</div>
                 <div className="meta">
                   {miss.prompt_type}
-                  {miss.submitted ? ` · you said ${miss.submitted}` : ""}
+                  {miss.submitted ? ` · you said ${miss.submitted}` : " · passed"}
                 </div>
               </div>
-            </div>
+            </button>
           ))}
         </div>
       ) : (
@@ -92,20 +118,32 @@ export default function TestView({
   autoStart = false,
   finishNote,
   onHome,
+  onFocus,
 }) {
+  const query = readQuery();
   const suggested = data?.decay?.summary?.suggested_levels || [];
-  const defaultMin = suggested.length ? Math.min(...suggested) : 14;
-  const defaultMax = suggested.length ? Math.max(...suggested) : 18;
+  const fallbackMin = suggested.length ? Math.min(...suggested) : 14;
+  const fallbackMax = suggested.length ? Math.max(...suggested) : 18;
+  const defaultMin = query.min ?? fallbackMin;
+  const defaultMax = query.max ?? fallbackMax;
 
-  const [kind, setKind] = useState(defaultKind);
-  const [pool, setPool] = useState(defaultPool);
+  const [kind, setKind] = useState(query.kind || defaultKind);
+  const [pool, setPool] = useState(query.pool || defaultPool);
   const [minLevel, setMinLevel] = useState(defaultMin);
   const [maxLevel, setMaxLevel] = useState(defaultMax);
-  const [count, setCount] = useState(defaultCount);
+  const [count, setCount] = useState(query.count || defaultCount);
   const [mode, setMode] = useState("both");
+  const [autoAdvance, setAutoAdvance] = useState(() => {
+    try {
+      return window.localStorage.getItem("kani-auto-advance") !== "0";
+    } catch {
+      return true;
+    }
+  });
   const [session, setSession] = useState(null);
   const [index, setIndex] = useState(0);
   const [feedback, setFeedback] = useState(null);
+  const [inspect, setInspect] = useState(null);
   const [misses, setMisses] = useState([]);
   const [typed, setTyped] = useState("");
   const [error, setError] = useState("");
@@ -118,6 +156,22 @@ export default function TestView({
   const composing = useRef(false);
   const inputRef = useRef(null);
   const autoStarted = useRef(false);
+  const nextRef = useRef(() => {});
+
+  const objectTypes = query.types || defaultObjectTypes;
+  const question = session?.questions?.[index] || null;
+  const finished = Boolean(feedback?.score?.finished) || (secondsLeft === 0 && session);
+  const isTyped = (session?.kind || kind) === "recall" || (session?.kind || kind) === "speed";
+  const progressTotal = session?.question_count || count;
+  const progressNow = feedback?.score?.total ?? (session ? index : 0);
+  const timeUp = session?.kind === "speed" && secondsLeft === 0;
+  const showRecap = Boolean(session && (wrapUp || timeUp));
+  const inSession = Boolean(session && !showRecap);
+
+  useEffect(() => {
+    onFocus?.(inSession);
+    return () => onFocus?.(false);
+  }, [inSession, onFocus]);
 
   useEffect(() => {
     if (!session) {
@@ -126,16 +180,11 @@ export default function TestView({
     }
   }, [defaultMin, defaultMax, session]);
 
-  const question = session?.questions?.[index] || null;
-  const finished = Boolean(feedback?.score?.finished) || (secondsLeft === 0 && session);
-  const isTyped = (session?.kind || kind) === "recall" || (session?.kind || kind) === "speed";
-  const progressTotal = session?.question_count || count;
-  const progressNow = feedback?.score?.total ?? (session ? index : 0);
-
   async function start(overrides = {}) {
     setBusy(true);
     setError("");
     setFeedback(null);
+    setInspect(null);
     setMisses([]);
     setCombo(0);
     setTyped("");
@@ -154,7 +203,7 @@ export default function TestView({
         modes,
         kind: nextKind,
         pool: nextPool,
-        object_types: defaultObjectTypes,
+        object_types: objectTypes,
       });
       setSession(drill);
       setIndex(0);
@@ -168,7 +217,7 @@ export default function TestView({
   }
 
   useEffect(() => {
-    if (autoStart && !autoStarted.current && data) {
+    if ((autoStart || query.go) && !autoStarted.current && data) {
       autoStarted.current = true;
       start();
     }
@@ -177,8 +226,7 @@ export default function TestView({
 
   useEffect(() => {
     if (!session || session.kind !== "speed" || finished) return undefined;
-    if (secondsLeft == null) return undefined;
-    if (secondsLeft <= 0) return undefined;
+    if (secondsLeft == null || secondsLeft <= 0) return undefined;
     const timer = window.setTimeout(() => setSecondsLeft((value) => value - 1), 1000);
     return () => window.clearTimeout(timer);
   }, [session, secondsLeft, finished]);
@@ -188,6 +236,30 @@ export default function TestView({
       inputRef.current.focus();
     }
   }, [isTyped, session, feedback, index]);
+
+  function applyResult(result, current) {
+    setFeedback(result);
+    setInspect(result.inspect || null);
+    setCombo(result.combo || 0);
+    setScoreboard({
+      correct: result.score?.correct || 0,
+      total: result.score?.total || 0,
+    });
+    if (!result.correct) {
+      setShake(true);
+      window.setTimeout(() => setShake(false), 420);
+      setMisses((list) => [
+        ...list,
+        {
+          characters: result.reveal?.characters || current.characters,
+          prompt_type: current.prompt_type,
+          submitted: result.submitted,
+          correct_answer: result.correct_answer,
+          subject_id: result.reveal?.subject_id,
+        },
+      ]);
+    }
+  }
 
   async function submitChoice(choiceIndex) {
     if (!session || !question || feedback || busy) return;
@@ -207,17 +279,17 @@ export default function TestView({
     }
   }
 
-  async function submitText() {
+  async function submitText(value = typed) {
     if (!session || !question || feedback || busy) return;
-    const value = typed.trim();
-    if (!value) return;
+    const trimmed = (value || "").trim();
+    if (!trimmed) return;
     setBusy(true);
     setError("");
     try {
       const result = await api.answerDrill({
         session_id: session.session_id,
         question_id: question.id,
-        text: value,
+        text: trimmed,
       });
       applyResult(result, question);
     } catch (err) {
@@ -227,25 +299,22 @@ export default function TestView({
     }
   }
 
-  function applyResult(result, current) {
-    setFeedback(result);
-    setCombo(result.combo || 0);
-    setScoreboard({
-      correct: result.score?.correct || 0,
-      total: result.score?.total || 0,
-    });
-    if (!result.correct) {
-      setShake(true);
-      window.setTimeout(() => setShake(false), 420);
-      setMisses((list) => [
-        ...list,
-        {
-          characters: result.reveal?.characters || current.characters,
-          prompt_type: current.prompt_type,
-          submitted: result.submitted,
-          correct_answer: result.correct_answer,
-        },
-      ]);
+  async function giveUp() {
+    if (!session || !question || feedback || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.answerDrill({
+        session_id: session.session_id,
+        question_id: question.id,
+        gave_up: true,
+        text: "",
+      });
+      applyResult(result, question);
+    } catch (err) {
+      setError(err.message || "Could not skip");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -257,8 +326,59 @@ export default function TestView({
     }
     setIndex((value) => value + 1);
     setFeedback(null);
+    setInspect(null);
     setTyped("");
   }
+
+  nextRef.current = next;
+
+  useEffect(() => {
+    if (!autoAdvance || !feedback?.correct || feedback?.score?.finished) return undefined;
+    const timer = window.setTimeout(() => nextRef.current(), 850);
+    return () => window.clearTimeout(timer);
+  }, [autoAdvance, feedback]);
+
+  async function openRelated(subjectId) {
+    try {
+      setInspect(await api.inspect(subjectId));
+    } catch {
+      /* keep current card */
+    }
+  }
+
+  useEffect(() => {
+    function onKey(event) {
+      if (composing.current) return;
+      const tag = (event.target.tagName || "").toLowerCase();
+      if (showRecap || !session) return;
+      if (feedback) {
+        if (event.key === "Enter" || event.key === " " || event.key === "n") {
+          event.preventDefault();
+          next();
+        }
+        return;
+      }
+      if (!question) return;
+      if (event.key === "?" || event.key === "-") {
+        if (tag === "input" && event.target.value) return;
+        event.preventDefault();
+        giveUp();
+        return;
+      }
+      if (!isTyped && /^[1-4]$/.test(event.key)) {
+        event.preventDefault();
+        submitChoice(Number(event.key) - 1);
+        return;
+      }
+      if (tag === "input" || tag === "textarea") return;
+      if (event.key === "Enter" && isTyped) {
+        event.preventDefault();
+        submitText();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   function onKeyDown(event) {
     if (composing.current) return;
@@ -268,11 +388,25 @@ export default function TestView({
     else submitText();
   }
 
-  const timeUp = session?.kind === "speed" && secondsLeft === 0;
-  const showRecap = Boolean(session && (wrapUp || timeUp));
+  function exit() {
+    setSession(null);
+    setFeedback(null);
+    setInspect(null);
+    setWrapUp(false);
+    autoStarted.current = true;
+  }
+
+  function persistAdvance(value) {
+    setAutoAdvance(value);
+    try {
+      window.localStorage.setItem("kani-auto-advance", value ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }
 
   return (
-    <section className="panel">
+    <section className={`panel ${inSession ? "focus-panel" : ""}`}>
       <div className="section-head">
         <div>
           <h2>{title}</h2>
@@ -328,15 +462,18 @@ export default function TestView({
               {busy ? "Building…" : kind === "speed" ? "Start blitz" : "Begin"}
             </button>
           </div>
-          {suggested.length ? (
-            <p className="note">
-              Decay Map suggests levels {suggested.join(", ")} right now.
-            </p>
-          ) : (
-            <p className="note">
-              Type answers the way WaniKani grades them. Readings accept kana or romaji.
-            </p>
-          )}
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={autoAdvance}
+              onChange={(e) => persistAdvance(e.target.checked)}
+            />
+            Auto-advance on correct
+          </label>
+          <p className="note">
+            Enter checks · 1–4 picks a choice · ? skips · Space continues.
+            {suggested.length ? ` Decay Map suggests ${suggested.join(", ")}.` : ""}
+          </p>
           {error ? <div className="error">{error}</div> : null}
         </div>
       ) : showRecap ? (
@@ -346,6 +483,7 @@ export default function TestView({
             verdict={feedback?.verdict || (timeUp ? "Time. That's the round." : finishNote)}
             comboBest={feedback?.combo_best || combo}
             misses={misses}
+            onInspect={openRelated}
             onAgain={() => start()}
             onRetryMisses={() => {
               setPool("misses");
@@ -354,6 +492,7 @@ export default function TestView({
             }}
             onHome={onHome}
           />
+          {inspect ? <InspectCard card={inspect} onOpenRelated={openRelated} /> : null}
         </div>
       ) : (
         <div className={`quiz-stage surface ${shake ? "shake" : ""}`}>
@@ -364,11 +503,14 @@ export default function TestView({
                 style={{ width: `${Math.min(100, (progressNow / progressTotal) * 100)}%` }}
               />
             </div>
-            <div className="muted">
-              {progressNow} / {progressTotal}
-              {feedback?.score ? ` · ${feedback.score.correct} correct` : ""}
-              {combo >= 2 ? ` · combo ${combo}` : ""}
-              {secondsLeft != null ? ` · ${secondsLeft}s` : ""}
+            <div className="meter-row">
+              <div className="muted">
+                {progressNow} / {progressTotal}
+                {feedback?.score ? ` · ${feedback.score.correct} correct` : ""}
+                {combo >= 2 ? ` · combo ${combo}` : ""}
+                {secondsLeft != null ? ` · ${secondsLeft}s` : ""}
+              </div>
+              <button type="button" className="text-btn" onClick={exit}>Exit</button>
             </div>
           </div>
 
@@ -384,7 +526,7 @@ export default function TestView({
                     ? question.prompt_text
                     : question.characters}
                 </div>
-                {isTyped ? (
+                {isTyped && !feedback ? (
                   <p className="note">
                     {question.prompt_type === "reading"
                       ? "Type the reading — hiragana or romaji."
@@ -443,6 +585,9 @@ export default function TestView({
                         disabled={busy || Boolean(feedback)}
                         onClick={() => submitChoice(choiceIndex)}
                       >
+                        {!isTyped && question.prompt_type !== "reverse" ? (
+                          <span className="choice-num">{choiceIndex + 1}</span>
+                        ) : null}
                         {choice}
                       </button>
                     );
@@ -452,26 +597,39 @@ export default function TestView({
             </>
           ) : null}
 
-          {feedback ? (
+          {!feedback ? (
+            <button type="button" className="text-btn" onClick={giveUp} disabled={busy}>
+              I don’t know (?)
+            </button>
+          ) : (
             <div className={`reveal ${feedback.correct ? "ok" : "nope"}`}>
               <strong>
-                {feedback.correct ? (combo >= 3 ? `Combo ${combo}.` : "Solid.") : feedback.almost ? "Almost." : "Not yet."}
+                {feedback.correct
+                  ? (combo >= 3 ? `Combo ${combo}.` : "Solid.")
+                  : feedback.almost
+                    ? "Almost."
+                    : feedback.gave_up
+                      ? "Passed."
+                      : "Not yet."}
               </strong>
               {" "}
               {feedback.reveal?.meaning || feedback.correct_answer}
-              {feedback.reveal?.readings?.length
-                ? ` · ${feedback.reveal.readings.join(" / ")}`
-                : ""}
+              {feedback.reveal?.readings_labeled?.length
+                ? ` · ${feedback.reveal.readings_labeled.map((item) => item.reading).join(" / ")}`
+                : feedback.reveal?.readings?.length
+                  ? ` · ${feedback.reveal.readings.join(" / ")}`
+                  : ""}
               {!feedback.correct && feedback.submitted ? (
                 <div className="meta">You said {feedback.submitted}</div>
               ) : null}
+              {inspect ? <InspectCard card={inspect} onOpenRelated={openRelated} /> : null}
               <div style={{ marginTop: "0.85rem" }}>
                 <button className="primary-btn" onClick={next}>
                   {feedback.score?.finished ? "Finish" : "Next"}
                 </button>
               </div>
             </div>
-          ) : null}
+          )}
 
           {error ? <div className="error">{error}</div> : null}
         </div>

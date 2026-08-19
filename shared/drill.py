@@ -12,7 +12,7 @@ import random
 import uuid
 from datetime import datetime, timezone
 
-from shared.answers import grade_answer as check_typed
+from shared.inspect import fetch_inspect
 from shared.quiz import (
     _accepted_meanings,
     _accepted_readings,
@@ -550,7 +550,7 @@ def _sensei_verdict(correct, total):
     return "Rough round. Retry the misses before the real queue."
 
 
-def grade_drill(db, session_id, question_id, choice_index=None, text=None):
+def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_up=False):
     ensure_schema(db)
     rows = db.execute(
         """
@@ -585,7 +585,10 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None):
     almost = False
     submitted = ""
     chosen_index = None
-    if prompt_type == "reverse" or kind == "mc" or (choice_index is not None and text is None):
+    if gave_up:
+        is_correct = False
+        submitted = ""
+    elif prompt_type == "reverse" or kind == "mc" or (choice_index is not None and text is None):
         if choice_index is None:
             raise ValueError("choice_index is required")
         chosen_index = int(choice_index)
@@ -640,6 +643,7 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None):
         "question_id": question_id,
         "correct": is_correct,
         "almost": almost,
+        "gave_up": bool(gave_up),
         "correct_index": correct_index,
         "correct_answer": correct_answer,
         "chosen_index": chosen_index,
@@ -667,11 +671,11 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None):
 
 
 def _hydrate_reveal(db, payload):
-    """Fill meaning/reading reveal from the subject catalog after grading."""
+    """Fill meaning/reading reveal plus a teaching card after grading."""
     try:
         rows = db.execute(
             """
-            select s.primary_meaning, s.meanings, s.readings
+            select q.subject_id, s.primary_meaning, s.meanings, s.readings
             from drill_questions q
             join wk_subjects s on s.id = q.subject_id
             where q.id = %s::uuid
@@ -683,16 +687,32 @@ def _hydrate_reveal(db, payload):
         return payload
     if not rows:
         return payload
-    primary, meanings_raw, readings_raw = rows[0]
+    subject_id, primary, meanings_raw, readings_raw = rows[0]
     payload["reveal"]["meaning"] = primary
     payload["reveal"]["meanings"] = _accepted_meanings(meanings_raw, primary)[:4]
     payload["reveal"]["readings"] = _accepted_readings(readings_raw)[:4]
+    payload["reveal"]["subject_id"] = subject_id
+    try:
+        card = fetch_inspect(db, subject_id)
+        payload["inspect"] = card
+        payload["reveal"]["wk_url"] = card.get("wk_url")
+        payload["reveal"]["audio_url"] = card.get("audio_url")
+        payload["reveal"]["readings_labeled"] = card.get("readings") or []
+    except Exception:
+        pass
     return payload
 
 
-def grade_drill_answer(db, session_id, question_id, choice_index=None, text=None):
+def grade_drill_answer(
+    db, session_id, question_id, choice_index=None, text=None, gave_up=False,
+):
     result = grade_drill(
-        db, session_id, question_id, choice_index=choice_index, text=text,
+        db,
+        session_id,
+        question_id,
+        choice_index=choice_index,
+        text=text,
+        gave_up=gave_up,
     )
     return _hydrate_reveal(db, result)
 

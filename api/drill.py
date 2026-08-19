@@ -75,6 +75,7 @@ class handler(BaseHTTPRequestHandler):
                     question_id,
                     choice_index=body.get("choice_index"),
                     text=body.get("text"),
+                    gave_up=bool(body.get("gave_up")),
                 )
                 respond(self, 200, result)
                 return

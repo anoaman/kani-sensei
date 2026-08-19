@@ -14,6 +14,7 @@ WaniKani nudge bot — sends Telegram messages when reviews are piling up.
 | `/api/overview` | GET | cookie / secret | Decay + Runway + practice stats |
 | `/api/quiz` | POST/GET | cookie / secret | Start warm-up or fetch session |
 | `/api/drill` | POST/GET | cookie / secret | Typed/reverse/speed drills + grading |
+| `/api/inspect` | GET | cookie / secret | Teaching card: components, similar kanji, sentence, audio |
 | `/api/tick` | POST | `X-Cron-Secret` header | Scheduler entry point — check window, fetch WK, nudge if needed |
 | `/api/telegram_webhook` | POST | Telegram IP | `/status` command — on-demand snapshot |
 | `/api/sync` | POST | `X-Cron-Secret` header | Daily WK → Neon sync (Phase 0) |

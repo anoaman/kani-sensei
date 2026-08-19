@@ -65,6 +65,14 @@ Schema is created on first drill request (`CREATE TABLE IF NOT EXISTS`) so
 a rolling deploy still works if `002_drills.sql` has not been applied yet.
 Still apply the migration when you can.
 
+## Follow-up: inspect + study UX
+
+After each answer, `/api/inspect` (and the drill reveal) now pull the cached
+WK payload: radicals the kanji is built from, visually similar glyphs,
+vocab that uses it, a context sentence, audio, and a mnemonic toggle.
+Decay Map levels start a targeted drill; items open an inspect sheet.
+Keyboard: Enter checks, 1–4 picks a choice, `?` skips, Space continues.
+
 ## Honest limits
 
 - Romaji conversion covers regular gojuon, youon, sokuon, and ん. Long

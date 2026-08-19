@@ -47,4 +47,6 @@ export const api = {
     }),
   getDrill: (sessionId) =>
     request(`/api/drill?session_id=${encodeURIComponent(sessionId)}`),
+  inspect: (subjectId) =>
+    request(`/api/inspect?subject_id=${encodeURIComponent(subjectId)}`),
 };
