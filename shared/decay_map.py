@@ -14,18 +14,18 @@ select
     r.meaning_correct, r.meaning_incorrect,
     r.reading_correct, r.reading_incorrect,
     a.srs_stage, a.available_at, a.burned_at,
-    prev.srs_stage as prev_srs_stage
+    prev.prev_srs_stage
 from wk_subjects s
 join wk_review_stats r on r.subject_id = s.id
 left join wk_assignments a on a.subject_id = s.id
-left join lateral (
-    select snap.srs_stage
-    from wk_assignment_snapshots snap
-    where snap.subject_id = s.id
-      and snap.snap_date < current_date
-    order by snap.snap_date desc
-    limit 1
-) prev on true
+left join (
+    select distinct on (subject_id)
+        subject_id,
+        srs_stage as prev_srs_stage
+    from wk_assignment_snapshots
+    where snap_date < current_date
+    order by subject_id, snap_date desc
+) prev on prev.subject_id = s.id
 where s.object_type in ('kanji', 'vocabulary')
   and (%s::integer is null or s.level >= %s::integer)
   and (%s::integer is null or s.level <= %s::integer)
@@ -183,36 +183,31 @@ def build_decay_map(rows, now=None, item_limit=100, history_available=False):
     }
 
 
-def _snapshots_ready(db):
+_SNAPSHOTS_READY = None
+
+
+def snapshots_ready(db):
+    """Cache whether assignment snapshots exist. Avoids a failing query aborting reuse()."""
+    global _SNAPSHOTS_READY
+    if _SNAPSHOTS_READY is not None:
+        return _SNAPSHOTS_READY
     try:
-        rows = db.execute(
-            """
-            select exists (
-                select 1 from information_schema.tables
-                where table_name = 'wk_assignment_snapshots'
-            ),
-            coalesce((select count(*) from wk_assignment_snapshots), 0)
-            """,
-            fetch=True,
-        )
-        exists, count = rows[0]
-        return bool(exists), int(count or 0)
+        _SNAPSHOTS_READY = bool(db.has_relation("public.wk_assignment_snapshots"))
     except Exception:
-        return False, 0
+        _SNAPSHOTS_READY = False
+    return _SNAPSHOTS_READY
 
 
 def fetch_decay_map(db, min_level=None, max_level=None, item_limit=100):
     params = [min_level, min_level, max_level, max_level]
-    exists, snap_count = _snapshots_ready(db)
-    query = DECAY_QUERY if exists else DECAY_QUERY_LEGACY
-    try:
-        rows = db.execute(query, params, fetch=True)
-    except Exception:
-        # Lateral/snapshot query can fail mid-rollout; fall back cleanly.
+    if snapshots_ready(db):
+        rows = db.execute(DECAY_QUERY, params, fetch=True)
+        history_available = any(row[-1] is not None for row in rows)
+    else:
         rows = db.execute(DECAY_QUERY_LEGACY, params, fetch=True)
-        exists, snap_count = False, 0
+        history_available = False
     return build_decay_map(
         rows,
         item_limit=item_limit,
-        history_available=exists and snap_count > 0,
+        history_available=history_available,
     )

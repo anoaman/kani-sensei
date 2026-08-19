@@ -1,20 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import InspectCard from "./InspectCard.jsx";
+import { T } from "./Term.jsx";
 
 const FORMATS = [
-  { id: "recall", label: "Type it", hint: "Same muscle as a real review" },
-  { id: "mc", label: "Multiple choice", hint: "Warm-up if recall feels sharp" },
-  { id: "reverse", label: "Reverse", hint: "See the meaning, pick the glyph" },
-  { id: "speed", label: "60s blitz", hint: "As many as you can in a minute" },
+  { id: "recall", label: "Type it", hint: "Same muscle as a real review", term: "recall" },
+  { id: "mc", label: "Multiple choice", hint: "Warm-up if recall feels sharp", term: "warmup" },
+  { id: "reverse", label: "Reverse", hint: "See the meaning, pick the glyph", term: "reverse" },
+  { id: "speed", label: "60s blitz", hint: "As many as you can in a minute", term: "blitz" },
 ];
 
 const POOLS = [
-  { id: "decay", label: "Decay-weighted" },
-  { id: "due", label: "Due now" },
-  { id: "leeches", label: "Leeches" },
-  { id: "burned", label: "Ghosts" },
-  { id: "misses", label: "My misses" },
+  { id: "decay", label: "Decay-weighted", term: "decay" },
+  { id: "due", label: "Due now", term: "due" },
+  { id: "leeches", label: "Leeches", term: "leech" },
+  { id: "burned", label: "Ghosts", term: "ghost" },
+  { id: "misses", label: "My misses", term: "notebook" },
 ];
 
 function readQuery() {
@@ -53,7 +54,13 @@ function ChipRow({ label, options, value, onChange, disabled }) {
             title={option.hint}
             onClick={() => onChange(option.id)}
           >
-            {option.label}
+            {option.term ? (
+              <T k={option.term} hoverOnly>
+                {option.label}
+              </T>
+            ) : (
+              option.label
+            )}
           </button>
         ))}
       </div>
@@ -68,7 +75,11 @@ function Recap({ score, verdict, comboBest, misses, onAgain, onRetryMisses, onHo
         <span className="eyebrow">Session</span>
         <div className="chars">{score.correct}/{score.total}</div>
         <p className="verdict">{verdict || "Round complete."}</p>
-        {comboBest ? <p className="note">Best combo {comboBest}</p> : null}
+        {comboBest ? (
+          <p className="note">
+            Best <T k="combo">combo</T> {comboBest}
+          </p>
+        ) : null}
       </div>
       {misses.length ? (
         <div className="miss-list">
@@ -92,7 +103,9 @@ function Recap({ score, verdict, comboBest, misses, onAgain, onRetryMisses, onHo
           ))}
         </div>
       ) : (
-        <p className="note">No misses. Take that straight into WaniKani.</p>
+        <p className="note">
+          No misses. Take that straight into <T k="wanikani">WaniKani</T>.
+        </p>
       )}
       <div className="hero-actions">
         <button className="primary-btn" onClick={onAgain}>Again</button>
@@ -451,7 +464,9 @@ export default function TestView({
               />
             </div>
             <div className="field">
-              <label>Focus</label>
+              <label>
+                <T k="meaning">Meaning</T> / <T k="reading">reading</T>
+              </label>
               <select value={mode} onChange={(e) => setMode(e.target.value)}>
                 <option value="both">Meaning + reading</option>
                 <option value="meaning">Meaning only</option>
@@ -507,7 +522,12 @@ export default function TestView({
               <div className="muted">
                 {progressNow} / {progressTotal}
                 {feedback?.score ? ` · ${feedback.score.correct} correct` : ""}
-                {combo >= 2 ? ` · combo ${combo}` : ""}
+                {combo >= 2 ? (
+                  <>
+                    {" · "}
+                    <T k="combo">combo</T> {combo}
+                  </>
+                ) : null}
                 {secondsLeft != null ? ` · ${secondsLeft}s` : ""}
               </div>
               <button type="button" className="text-btn" onClick={exit}>Exit</button>

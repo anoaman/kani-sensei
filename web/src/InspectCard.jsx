@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { ReadingTerm, SrsTerm, T } from "./Term.jsx";
 
 function GlyphChip({ item, onOpen }) {
   if (!item) return null;
@@ -46,14 +47,21 @@ export default function InspectCard({ card, onOpenRelated }) {
                   <span key={`${item.reading}-${item.type}`}>
                     {item.reading}
                     {item.type && item.type !== "reading" ? (
-                      <span className="meta"> {item.type}</span>
+                      <span className="meta">
+                        {" "}
+                        <ReadingTerm type={item.type} />
+                      </span>
                     ) : null}
                   </span>
                 ))
               : card.meaning}
           </div>
           <div className="muted">
-            {card.srs_name || ""}
+            {card.srs_name ? (
+              <>
+                <T k="srs">SRS</T> <SrsTerm name={card.srs_name} />
+              </>
+            ) : null}
             {card.parts_of_speech?.length ? ` · ${card.parts_of_speech.join(", ")}` : ""}
           </div>
         </div>
@@ -65,7 +73,7 @@ export default function InspectCard({ card, onOpenRelated }) {
           ) : null}
           {card.wk_url ? (
             <a className="ghost-btn" href={card.wk_url} target="_blank" rel="noreferrer">
-              WaniKani
+              <T k="wanikani" hoverOnly>WaniKani</T>
             </a>
           ) : null}
         </div>
@@ -122,7 +130,15 @@ export default function InspectCard({ card, onOpenRelated }) {
       {(card.mnemonic?.meaning || card.mnemonic?.reading) ? (
         <div>
           <button type="button" className="text-btn" onClick={() => setShowMnemonic((v) => !v)}>
-            {showMnemonic ? "Hide mnemonic" : "Show mnemonic"}
+            {showMnemonic ? (
+              <>
+                Hide <T k="mnemonic" hoverOnly>mnemonic</T>
+              </>
+            ) : (
+              <>
+                Show <T k="mnemonic" hoverOnly>mnemonic</T>
+              </>
+            )}
           </button>
           {showMnemonic ? (
             <div className="mnemonic">

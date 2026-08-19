@@ -909,3 +909,68 @@ a.chip {
     grid-template-columns: 1fr;
   }
 }
+
+.term {
+  display: inline;
+}
+
+.term-hit {
+  border-bottom: 1px dotted rgba(31, 122, 116, 0.75);
+  cursor: help;
+  text-underline-offset: 0.18em;
+}
+
+.term-hit:focus-visible {
+  outline: 2px solid var(--sea);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.term-tip {
+  position: fixed;
+  z-index: 80;
+  display: grid;
+  gap: 0.28rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 12px;
+  background: #122033;
+  color: #f4f7f8;
+  box-shadow: 0 16px 40px rgba(18, 32, 51, 0.28);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.term-tip strong {
+  font-family: var(--serif);
+  font-weight: 600;
+  color: var(--foam);
+}
+
+.glossary-group {
+  margin-top: 1.5rem;
+}
+
+.glossary-group h3 {
+  font-family: var(--serif);
+  margin: 0 0 0.35rem;
+}
+
+.glossary-item {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.9rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.glossary-item dt {
+  font-weight: 600;
+}
+
+.glossary-item dd {
+  margin: 0;
+}
+
+.glossary-item dd p {
+  margin: 0 0 0.35rem;
+}
