@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.auth import is_authorized, query_params
 from shared.decay_map import fetch_decay_map
 from shared.http_util import optional_bool, optional_int, respond
+from shared.drill import fetch_practice_overview
 from shared.neon import NeonClient
 from shared.runway import fetch_runway_plan
 
@@ -69,10 +70,15 @@ class handler(BaseHTTPRequestHandler):
                     }
             except Exception:
                 last_sync = None
+            try:
+                practice = fetch_practice_overview(db)
+            except Exception:
+                practice = None
             respond(self, 200, {
                 "decay": decay,
                 "runway": runway,
                 "last_sync": last_sync,
+                "practice": practice,
             })
         except (TypeError, ValueError) as exc:
             respond(self, 400, {"error": str(exc)})

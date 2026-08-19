@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
+import InspectCard from "./InspectCard.jsx";
+import TestView from "./TestView.jsx";
 
 const CATEGORIES = [
   { id: "vocab", label: "Vocab", objectTypes: ["vocabulary"] },
@@ -9,18 +11,44 @@ const CATEGORIES = [
 
 const VIEWS = [
   { id: "home", label: "Home", path: "/" },
-  { id: "decay", label: "Decay Map", path: "/" },
-  { id: "runway", label: "Runway", path: "/" },
-  { id: "quiz", label: "Warm-Up", path: "/" },
-  { id: "kanji", label: "Kanji Test", path: "/kanji" },
+  { id: "practice", label: "Practice", path: "/practice" },
+  { id: "decay", label: "Map", path: "/decay" },
+  { id: "runway", label: "Runway", path: "/runway" },
 ];
 
+const STUDY_VIEWS = new Set([
+  "practice", "quiz", "kanji", "vocab", "ghosts", "leeches", "dojo", "drill",
+]);
+
+const PATHS = {
+  home: "/",
+  decay: "/decay",
+  runway: "/runway",
+  quiz: "/warmup",
+  kanji: "/kanji",
+  vocab: "/vocab",
+  ghosts: "/ghosts",
+  leeches: "/leeches",
+  dojo: "/dojo",
+  practice: "/practice",
+  drill: "/drill",
+};
+
 function pathForView(viewId) {
-  return viewId === "kanji" ? "/kanji" : "/";
+  return PATHS[viewId] || "/";
 }
 
 function viewFromPath(pathname) {
-  if (pathname === "/kanji" || pathname.startsWith("/kanji/")) return "kanji";
+  if (pathname.startsWith("/kanji")) return "kanji";
+  if (pathname.startsWith("/vocab")) return "vocab";
+  if (pathname.startsWith("/ghosts")) return "ghosts";
+  if (pathname.startsWith("/leeches")) return "leeches";
+  if (pathname.startsWith("/dojo")) return "dojo";
+  if (pathname.startsWith("/decay")) return "decay";
+  if (pathname.startsWith("/runway")) return "runway";
+  if (pathname.startsWith("/warmup")) return "quiz";
+  if (pathname.startsWith("/practice")) return "practice";
+  if (pathname.startsWith("/drill")) return "drill";
   return "home";
 }
 
@@ -79,28 +107,49 @@ function Login({ onReady }) {
   );
 }
 
-function Home({ data, onNavigate }) {
+function Home({ data, onNavigate, onInspect }) {
   const suggested = data?.decay?.summary?.suggested_levels || [];
   const runway = data?.runway;
+  const practice = data?.practice || {};
   return (
     <section className="hero panel">
       <div className="hero-wash" aria-hidden="true" />
       <h1 className="hero-brand">Kani Sensei</h1>
       <p>
         The queue looks huge because it is. Start with what actually rotted,
-        warm it back up, then burn the rest at a pace you can keep.
+        type it the way WaniKani will ask, then burn the rest at a pace you can keep.
       </p>
       <div className="hero-actions">
-        <button className="primary-btn" onClick={() => onNavigate("quiz")}>
-          Start warm-up
+        <button className="primary-btn" onClick={() => onNavigate("dojo")}>
+          Daily dojo
         </button>
         <button className="ghost-btn" onClick={() => onNavigate("kanji")}>
           Kanji test
         </button>
-        <button className="ghost-btn" onClick={() => onNavigate("decay")}>
-          See decay map
+        <button className="ghost-btn" onClick={() => onNavigate("vocab")}>
+          Vocab test
+        </button>
+        <button className="ghost-btn" onClick={() => onNavigate("practice")}>
+          All practice
         </button>
       </div>
+      {suggested.length ? (
+        <div className="chips" style={{ marginTop: "1.1rem" }}>
+          {suggested.map((level) => (
+            <button
+              key={level}
+              type="button"
+              className="chip"
+              onClick={() => onNavigate("drill", { min: level, max: level, go: 1, types: "kanji,vocabulary" })}
+            >
+              Drill lv {level}
+            </button>
+          ))}
+          <a className="chip" href="https://www.wanikani.com/subjects/review" target="_blank" rel="noreferrer">
+            Open WK reviews
+          </a>
+        </div>
+      ) : null}
       <div className="metric-row" style={{ marginTop: "2rem" }}>
         <div className="metric">
           <span className="label">Suggested levels</span>
@@ -119,11 +168,58 @@ function Home({ data, onNavigate }) {
           </span>
         </div>
       </div>
+      <div className="practice-grid">
+        <button className="practice-card" onClick={() => onNavigate("ghosts")}>
+          <span className="eyebrow">Ghost reviews</span>
+          <strong>{practice.burned ?? "—"} burned</strong>
+          <p>WK never resurfaces these. We will, so they don't silently rot.</p>
+        </button>
+        <button className="practice-card" onClick={() => onNavigate("leeches")}>
+          <span className="eyebrow">Leech clinic</span>
+          <strong>{practice.leeches ?? "—"} leeches</strong>
+          <p>Chronic misses. Drill them here so the real queue stops eating you.</p>
+        </button>
+        <button className="practice-card" onClick={() => onNavigate("kanji")}>
+          <span className="eyebrow">This week's drills</span>
+          <strong>
+            {practice.week_accuracy != null ? `${practice.week_accuracy}%` : "—"}
+          </strong>
+          <p>
+            {practice.week_sessions
+              ? `${practice.week_sessions} sessions · best combo ${practice.combo_best || 0}`
+              : "No Sensei drills yet this week. Open a test."}
+          </p>
+        </button>
+      </div>
+      {practice.notebook?.length ? (
+        <div className="surface notebook">
+          <strong>Sensei notebook</strong>
+          <div className="item-list" style={{ marginTop: "0.85rem" }}>
+            {practice.notebook.map((item) => (
+              <button
+                type="button"
+                className="item item-btn"
+                key={item.subject_id}
+                onClick={() => onInspect?.(item.subject_id)}
+              >
+                <div className="glyph">{item.characters}</div>
+                <div>
+                  <div>{item.meaning || "—"}</div>
+                  <div className="meta">
+                    Lv {item.level} · {item.type} · missed {item.miss_count}
+                    {item.hit_count ? ` · recovered ${item.hit_count}` : ""}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
 
-function DecayView({ data }) {
+function DecayView({ data, onNavigate, onInspect }) {
   const decay = data?.decay;
   if (!decay) return <div className="empty">Loading decay map…</div>;
   const maxRisk = Math.max(1, ...(decay.levels || []).map((l) => l.risk || 0));
@@ -135,7 +231,8 @@ function DecayView({ data }) {
           <h2>Decay Map</h2>
           <p>
             What looks soft in the current snapshot — ranked so you know where
-            to start, not where to panic.
+            to start, not where to panic. Click a level to drill it, or an item
+            to see how it is built.
           </p>
         </div>
       </div>
@@ -157,7 +254,14 @@ function DecayView({ data }) {
           </div>
           <div className="level-list">
             {(decay.levels || []).slice(0, 12).map((level) => (
-              <div className="level-row" key={level.level}>
+              <button
+                type="button"
+                className="level-row level-btn"
+                key={level.level}
+                onClick={() => onNavigate("drill", {
+                  min: level.level, max: level.level, go: 1, types: "kanji,vocabulary",
+                })}
+              >
                 <strong>Lv {level.level}</strong>
                 <div className="bar">
                   <div
@@ -166,7 +270,7 @@ function DecayView({ data }) {
                   />
                 </div>
                 <span className="muted">{level.risk}</span>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -174,7 +278,12 @@ function DecayView({ data }) {
           <strong>Highest pressure items</strong>
           <div className="item-list" style={{ marginTop: "0.85rem" }}>
             {(decay.items || []).slice(0, 10).map((item) => (
-              <div className="item" key={item.subject_id}>
+              <button
+                type="button"
+                className="item item-btn"
+                key={item.subject_id}
+                onClick={() => onInspect?.(item.subject_id)}
+              >
                 <div className="glyph">{item.characters}</div>
                 <div>
                   <div>{item.meaning || "—"}</div>
@@ -184,7 +293,7 @@ function DecayView({ data }) {
                   </div>
                 </div>
                 <div className={`band ${item.band}`}>{item.band}</div>
-              </div>
+              </button>
             ))}
           </div>
           <p className="note" style={{ marginTop: "1rem" }}>
@@ -202,7 +311,7 @@ function DecayView({ data }) {
   );
 }
 
-function RunwayView({ data }) {
+function RunwayView({ data, onNavigate }) {
   const runway = data?.runway;
   if (!runway) return <div className="empty">Loading runway…</div>;
   const stages = runway.apprentice_breakdown || {};
@@ -279,6 +388,45 @@ function RunwayView({ data }) {
             </span>
           ))}
         </p>
+        <div className="hero-actions" style={{ marginTop: "1.1rem" }}>
+          <a className="primary-btn" href="https://www.wanikani.com/subjects/review" target="_blank" rel="noreferrer">
+            Open WaniKani reviews
+          </a>
+          <button className="ghost-btn" onClick={() => onNavigate?.("drill", { pool: "due", go: 1, types: "kanji,vocabulary" })}>
+            Drill what’s due
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PracticeHub({ data, onNavigate }) {
+  const practice = data?.practice || {};
+  const cards = [
+    { id: "dojo", title: "Daily dojo", value: "12 typed", note: "Decay-weighted, no setup." },
+    { id: "kanji", title: "Kanji test", value: "Type it", note: "Meaning and reading, WK motion." },
+    { id: "vocab", title: "Vocab test", value: "Type it", note: "Compounds that went soft." },
+    { id: "ghosts", title: "Ghost reviews", value: practice.burned ?? "—", note: "Burned items WK never shows." },
+    { id: "leeches", title: "Leech clinic", value: practice.leeches ?? "—", note: "Chronic misses, isolated." },
+    { id: "quiz", title: "Warm-up", value: "MC", note: "Four choices when recall is too sharp." },
+  ];
+  return (
+    <section className="panel">
+      <div className="section-head">
+        <div>
+          <h2>Practice</h2>
+          <p>Pick a drill. Typed recall is the default because that’s what the real queue asks for.</p>
+        </div>
+      </div>
+      <div className="practice-grid practice-grid-wide">
+        {cards.map((card) => (
+          <button key={card.id} className="practice-card" onClick={() => onNavigate(card.id)}>
+            <span className="eyebrow">{card.title}</span>
+            <strong>{card.value}</strong>
+            <p>{card.note}</p>
+          </button>
+        ))}
       </div>
     </section>
   );
@@ -560,12 +708,31 @@ export default function App() {
   const [view, setView] = useState(() => viewFromPath(window.location.pathname));
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState("");
+  const [focus, setFocus] = useState(false);
+  const [sheet, setSheet] = useState(null);
 
-  function navigate(nextView) {
+  function navigate(nextView, query) {
     setView(nextView);
-    const nextPath = pathForView(nextView);
-    if (window.location.pathname !== nextPath) {
+    let nextPath = pathForView(nextView);
+    if (query) {
+      const params = new URLSearchParams();
+      Object.entries(query).forEach(([key, value]) => {
+        if (value != null && value !== "") params.set(key, String(value));
+      });
+      const encoded = params.toString();
+      if (encoded) nextPath += `?${encoded}`;
+    }
+    if (`${window.location.pathname}${window.location.search}` !== nextPath) {
       window.history.pushState({ view: nextView }, "", nextPath);
+    }
+  }
+
+  async function openInspect(subjectId) {
+    if (!subjectId) return;
+    try {
+      setSheet(await api.inspect(subjectId));
+    } catch (err) {
+      setLoadError(err.message || "Could not inspect subject");
     }
   }
 
@@ -597,6 +764,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    function onKey(event) {
+      if (event.key === "Escape") setSheet(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
     if (auth) loadOverview();
   }, [auth]);
 
@@ -622,17 +797,17 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${focus ? "is-focus" : ""}`}>
       <header className="topbar">
-        <div className="brand-mark">
+        <button type="button" className="brand-mark brand-btn" onClick={() => navigate("home")}>
           <strong>Kani Sensei</strong>
           <span>{syncNote || "WaniKani re-entry"}</span>
-        </div>
-        <nav className="nav" aria-label="Primary">
+        </button>
+        <nav className="nav" aria-label="Primary" hidden={focus}>
           {VIEWS.map((item) => (
             <button
               key={item.id}
-              className={view === item.id ? "active" : ""}
+              className={(item.id === "practice" ? STUDY_VIEWS.has(view) : view === item.id) ? "active" : ""}
               onClick={() => navigate(item.id)}
             >
               {item.label}
@@ -653,9 +828,10 @@ export default function App() {
 
       {loadError ? <div className="error" style={{ marginBottom: "1rem" }}>{loadError}</div> : null}
 
-      {view === "home" ? <Home data={data} onNavigate={navigate} /> : null}
-      {view === "decay" ? <DecayView data={data} /> : null}
-      {view === "runway" ? <RunwayView data={data} /> : null}
+      {view === "home" ? <Home data={data} onNavigate={navigate} onInspect={openInspect} /> : null}
+      {view === "practice" ? <PracticeHub data={data} onNavigate={navigate} /> : null}
+      {view === "decay" ? <DecayView data={data} onNavigate={navigate} onInspect={openInspect} /> : null}
+      {view === "runway" ? <RunwayView data={data} onNavigate={navigate} /> : null}
       {view === "quiz" ? (
         <QuizView
           data={data}
@@ -665,14 +841,100 @@ export default function App() {
         />
       ) : null}
       {view === "kanji" ? (
-        <QuizView
+        <TestView
           key="kanji-test"
           data={data}
-          defaultCategory="kanji"
+          defaultObjectTypes={["kanji"]}
+          defaultKind="recall"
           title="Kanji Test"
-          blurb="Dedicated drills with the same warm-up mechanics. Starts on Kanji — switch to Vocab or Radicals whenever you want."
+          blurb="Type the meaning or reading — the same motion as a WaniKani review. Switch to reverse or multiple choice if you want a softer landing."
           finishNote="Kanji test complete. Carry that clarity into reviews."
+          onHome={() => navigate("home")}
+          onFocus={setFocus}
         />
+      ) : null}
+      {view === "vocab" ? (
+        <TestView
+          key="vocab-test"
+          data={data}
+          defaultObjectTypes={["vocabulary"]}
+          defaultKind="recall"
+          title="Vocab Test"
+          blurb="Typed vocab drills, decay-weighted so the soft compounds show up first. Reverse mode checks whether you still recognize the word on sight."
+          finishNote="Vocab test complete. The compounds should feel less slippery."
+          onHome={() => navigate("home")}
+          onFocus={setFocus}
+        />
+      ) : null}
+      {view === "ghosts" ? (
+        <TestView
+          key="ghosts"
+          data={data}
+          defaultObjectTypes={["kanji", "vocabulary"]}
+          defaultKind="recall"
+          defaultPool="burned"
+          title="Ghost Reviews"
+          blurb="Burned items never come back on WaniKani. This is the only place they still have to earn their keep."
+          finishNote="Ghosts laid to rest. For now."
+          onHome={() => navigate("home")}
+          onFocus={setFocus}
+        />
+      ) : null}
+      {view === "leeches" ? (
+        <TestView
+          key="leeches"
+          data={data}
+          defaultObjectTypes={["kanji", "vocabulary"]}
+          defaultKind="recall"
+          defaultPool="leeches"
+          title="Leech Clinic"
+          blurb="Items with a long history of wrong answers. Sit with them here so they stop draining the real review queue."
+          finishNote="Leeches trimmed. Go cash that in on WaniKani."
+          onHome={() => navigate("home")}
+          onFocus={setFocus}
+        />
+      ) : null}
+      {view === "dojo" ? (
+        <TestView
+          key="dojo"
+          data={data}
+          defaultObjectTypes={["kanji", "vocabulary"]}
+          defaultKind="recall"
+          defaultPool="decay"
+          defaultCount={12}
+          autoStart
+          title="Daily Dojo"
+          blurb="Twelve typed questions from whatever Decay Map says is rotting. No setup — just start."
+          finishNote="Dojo closed. The pile is a little less loud."
+          onHome={() => navigate("home")}
+          onFocus={setFocus}
+        />
+      ) : null}
+      {view === "drill" ? (
+        <TestView
+          key={`drill-${window.location.search}`}
+          data={data}
+          defaultObjectTypes={["kanji", "vocabulary"]}
+          defaultKind="recall"
+          title="Targeted drill"
+          blurb="A decay-weighted round pointed at one hotspot — usually a level you clicked on the map."
+          finishNote="Hotspot cooled. Back to the map whenever you want."
+          onHome={() => navigate("home")}
+          onFocus={setFocus}
+        />
+      ) : null}
+
+      {sheet ? (
+        <div className="sheet-backdrop" onClick={() => setSheet(null)} role="presentation">
+          <div className="sheet surface" onClick={(event) => event.stopPropagation()} role="dialog" aria-label="Subject inspect">
+            <div className="sheet-top">
+              <div className="chars small">{sheet.characters}</div>
+              <button type="button" className="ghost-btn" onClick={() => setSheet(null)}>Close</button>
+            </div>
+            <p className="note">{sheet.meaning}</p>
+            <InspectCard card={sheet} onOpenRelated={openInspect} />
+          </div>
+        </div>
       ) : null}
     </div>
   );

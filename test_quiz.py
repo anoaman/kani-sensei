@@ -122,7 +122,7 @@ class QuizTests(unittest.TestCase):
     def test_normalize_object_types_aliases(self):
         self.assertEqual(normalize_object_types(["vocab"]), ["vocabulary"])
         self.assertEqual(normalize_object_types(["radicals"]), ["radical"])
-        self.assertEqual(normalize_object_types(None), ["kanji", "vocabulary"])
+        self.assertEqual(normalize_object_types(["kana"]), ["kana_vocabulary"])
 
     def test_build_quiz_filters_to_kanji_only(self):
         rows = []
