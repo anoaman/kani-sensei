@@ -38,4 +38,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  startDrill: (body) =>
+    request("/api/drill", { method: "POST", body: JSON.stringify(body) }),
+  answerDrill: (body) =>
+    request("/api/drill?action=answer", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getDrill: (sessionId) =>
+    request(`/api/drill?session_id=${encodeURIComponent(sessionId)}`),
 };

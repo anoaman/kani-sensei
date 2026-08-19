@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
+import TestView from "./TestView.jsx";
 
 const CATEGORIES = [
   { id: "vocab", label: "Vocab", objectTypes: ["vocabulary"] },
@@ -9,18 +10,40 @@ const CATEGORIES = [
 
 const VIEWS = [
   { id: "home", label: "Home", path: "/" },
-  { id: "decay", label: "Decay Map", path: "/" },
-  { id: "runway", label: "Runway", path: "/" },
-  { id: "quiz", label: "Warm-Up", path: "/" },
-  { id: "kanji", label: "Kanji Test", path: "/kanji" },
+  { id: "decay", label: "Map", path: "/decay" },
+  { id: "runway", label: "Runway", path: "/runway" },
+  { id: "quiz", label: "Warm-Up", path: "/warmup" },
+  { id: "kanji", label: "Kanji", path: "/kanji" },
+  { id: "vocab", label: "Vocab", path: "/vocab" },
+  { id: "ghosts", label: "Ghosts", path: "/ghosts" },
+  { id: "leeches", label: "Leeches", path: "/leeches" },
 ];
 
+const PATHS = {
+  home: "/",
+  decay: "/decay",
+  runway: "/runway",
+  quiz: "/warmup",
+  kanji: "/kanji",
+  vocab: "/vocab",
+  ghosts: "/ghosts",
+  leeches: "/leeches",
+  dojo: "/dojo",
+};
+
 function pathForView(viewId) {
-  return viewId === "kanji" ? "/kanji" : "/";
+  return PATHS[viewId] || "/";
 }
 
 function viewFromPath(pathname) {
-  if (pathname === "/kanji" || pathname.startsWith("/kanji/")) return "kanji";
+  if (pathname.startsWith("/kanji")) return "kanji";
+  if (pathname.startsWith("/vocab")) return "vocab";
+  if (pathname.startsWith("/ghosts")) return "ghosts";
+  if (pathname.startsWith("/leeches")) return "leeches";
+  if (pathname.startsWith("/dojo")) return "dojo";
+  if (pathname.startsWith("/decay")) return "decay";
+  if (pathname.startsWith("/runway")) return "runway";
+  if (pathname.startsWith("/warmup")) return "quiz";
   return "home";
 }
 
@@ -82,23 +105,27 @@ function Login({ onReady }) {
 function Home({ data, onNavigate }) {
   const suggested = data?.decay?.summary?.suggested_levels || [];
   const runway = data?.runway;
+  const practice = data?.practice || {};
   return (
     <section className="hero panel">
       <div className="hero-wash" aria-hidden="true" />
       <h1 className="hero-brand">Kani Sensei</h1>
       <p>
         The queue looks huge because it is. Start with what actually rotted,
-        warm it back up, then burn the rest at a pace you can keep.
+        type it the way WaniKani will ask, then burn the rest at a pace you can keep.
       </p>
       <div className="hero-actions">
-        <button className="primary-btn" onClick={() => onNavigate("quiz")}>
-          Start warm-up
+        <button className="primary-btn" onClick={() => onNavigate("dojo")}>
+          Daily dojo
         </button>
         <button className="ghost-btn" onClick={() => onNavigate("kanji")}>
           Kanji test
         </button>
-        <button className="ghost-btn" onClick={() => onNavigate("decay")}>
-          See decay map
+        <button className="ghost-btn" onClick={() => onNavigate("vocab")}>
+          Vocab test
+        </button>
+        <button className="ghost-btn" onClick={() => onNavigate("quiz")}>
+          Multiple-choice warm-up
         </button>
       </div>
       <div className="metric-row" style={{ marginTop: "2rem" }}>
@@ -119,6 +146,48 @@ function Home({ data, onNavigate }) {
           </span>
         </div>
       </div>
+      <div className="practice-grid">
+        <button className="practice-card" onClick={() => onNavigate("ghosts")}>
+          <span className="eyebrow">Ghost reviews</span>
+          <strong>{practice.burned ?? "—"} burned</strong>
+          <p>WK never resurfaces these. We will, so they don't silently rot.</p>
+        </button>
+        <button className="practice-card" onClick={() => onNavigate("leeches")}>
+          <span className="eyebrow">Leech clinic</span>
+          <strong>{practice.leeches ?? "—"} leeches</strong>
+          <p>Chronic misses. Drill them here so the real queue stops eating you.</p>
+        </button>
+        <button className="practice-card" onClick={() => onNavigate("kanji")}>
+          <span className="eyebrow">This week's drills</span>
+          <strong>
+            {practice.week_accuracy != null ? `${practice.week_accuracy}%` : "—"}
+          </strong>
+          <p>
+            {practice.week_sessions
+              ? `${practice.week_sessions} sessions · best combo ${practice.combo_best || 0}`
+              : "No Sensei drills yet this week. Open a test."}
+          </p>
+        </button>
+      </div>
+      {practice.notebook?.length ? (
+        <div className="surface notebook">
+          <strong>Sensei notebook</strong>
+          <div className="item-list" style={{ marginTop: "0.85rem" }}>
+            {practice.notebook.map((item) => (
+              <div className="item" key={item.subject_id}>
+                <div className="glyph">{item.characters}</div>
+                <div>
+                  <div>{item.meaning || "—"}</div>
+                  <div className="meta">
+                    Lv {item.level} · {item.type} · missed {item.miss_count}
+                    {item.hit_count ? ` · recovered ${item.hit_count}` : ""}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -665,13 +734,68 @@ export default function App() {
         />
       ) : null}
       {view === "kanji" ? (
-        <QuizView
+        <TestView
           key="kanji-test"
           data={data}
-          defaultCategory="kanji"
+          defaultObjectTypes={["kanji"]}
+          defaultKind="recall"
           title="Kanji Test"
-          blurb="Dedicated drills with the same warm-up mechanics. Starts on Kanji — switch to Vocab or Radicals whenever you want."
+          blurb="Type the meaning or reading — the same motion as a WaniKani review. Switch to reverse or multiple choice if you want a softer landing."
           finishNote="Kanji test complete. Carry that clarity into reviews."
+          onHome={() => navigate("home")}
+        />
+      ) : null}
+      {view === "vocab" ? (
+        <TestView
+          key="vocab-test"
+          data={data}
+          defaultObjectTypes={["vocabulary"]}
+          defaultKind="recall"
+          title="Vocab Test"
+          blurb="Typed vocab drills, decay-weighted so the soft compounds show up first. Reverse mode checks whether you still recognize the word on sight."
+          finishNote="Vocab test complete. The compounds should feel less slippery."
+          onHome={() => navigate("home")}
+        />
+      ) : null}
+      {view === "ghosts" ? (
+        <TestView
+          key="ghosts"
+          data={data}
+          defaultObjectTypes={["kanji", "vocabulary"]}
+          defaultKind="recall"
+          defaultPool="burned"
+          title="Ghost Reviews"
+          blurb="Burned items never come back on WaniKani. This is the only place they still have to earn their keep."
+          finishNote="Ghosts laid to rest. For now."
+          onHome={() => navigate("home")}
+        />
+      ) : null}
+      {view === "leeches" ? (
+        <TestView
+          key="leeches"
+          data={data}
+          defaultObjectTypes={["kanji", "vocabulary"]}
+          defaultKind="recall"
+          defaultPool="leeches"
+          title="Leech Clinic"
+          blurb="Items with a long history of wrong answers. Sit with them here so they stop draining the real review queue."
+          finishNote="Leeches trimmed. Go cash that in on WaniKani."
+          onHome={() => navigate("home")}
+        />
+      ) : null}
+      {view === "dojo" ? (
+        <TestView
+          key="dojo"
+          data={data}
+          defaultObjectTypes={["kanji", "vocabulary"]}
+          defaultKind="recall"
+          defaultPool="decay"
+          defaultCount={12}
+          autoStart
+          title="Daily Dojo"
+          blurb="Twelve typed questions from whatever Decay Map says is rotting. No setup — just start."
+          finishNote="Dojo closed. The pile is a little less loud."
+          onHome={() => navigate("home")}
         />
       ) : null}
     </div>

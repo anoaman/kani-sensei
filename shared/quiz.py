@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from shared.decay_map import classify_item
 
 
-ALLOWED_OBJECT_TYPES = ("kanji", "vocabulary", "radical")
+ALLOWED_OBJECT_TYPES = ("kanji", "vocabulary", "radical", "kana_vocabulary")
 DEFAULT_OBJECT_TYPES = ("kanji", "vocabulary")
 OBJECT_TYPE_ALIASES = {
     "kanji": "kanji",
@@ -23,6 +23,8 @@ OBJECT_TYPE_ALIASES = {
     "vocab": "vocabulary",
     "radical": "radical",
     "radicals": "radical",
+    "kana_vocabulary": "kana_vocabulary",
+    "kana": "kana_vocabulary",
 }
 
 QUIZ_POOL_QUERY = """
@@ -82,7 +84,7 @@ def normalize_object_types(object_types=None):
         mapped = OBJECT_TYPE_ALIASES.get(key)
         if mapped is None:
             raise ValueError(
-                "object_types must be kanji, vocabulary, and/or radical"
+                "object_types must be kanji, vocabulary, radical, and/or kana_vocabulary"
             )
         if mapped not in cleaned:
             cleaned.append(mapped)
@@ -156,12 +158,18 @@ def enrich_pool_row(row, now=None):
     meanings = _accepted_meanings(meanings_raw, primary_meaning)
     readings = _accepted_readings(readings_raw)
     primary_reading = _primary_reading(readings_raw)
+    stage = classified.get("srs_stage") or 0
     return {
         **classified,
         "meanings": meanings,
         "readings": readings,
         "primary_reading": primary_reading,
         "primary_meaning": meanings[0] if meanings else primary_meaning,
+        "burned": burned_at is not None or stage >= 9,
+        "meaning_correct": meaning_correct or 0,
+        "meaning_incorrect": meaning_incorrect or 0,
+        "reading_correct": reading_correct or 0,
+        "reading_incorrect": reading_incorrect or 0,
     }
 
 
