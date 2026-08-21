@@ -10,11 +10,63 @@ import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.auth import is_authorized, query_params
+from shared import cache
 from shared.decay_map import fetch_decay_map
 from shared.http_util import optional_bool, optional_int, respond
 from shared.drill import fetch_practice_overview
 from shared.neon import NeonClient
 from shared.runway import fetch_runway_plan
+
+
+OVERVIEW_TTL = 45
+
+
+def _cache_key(min_level, max_level, limit, daily_reviews, include_new_lessons):
+    return (
+        f"overview:{min_level}:{max_level}:{limit}:"
+        f"{daily_reviews}:{int(bool(include_new_lessons))}"
+    )
+
+
+def build_overview(db, min_level, max_level, limit, daily_reviews, include_new_lessons):
+    with db.reuse():
+        decay = fetch_decay_map(db, min_level, max_level, limit)
+        runway = fetch_runway_plan(
+            db,
+            daily_reviews=daily_reviews,
+            include_new_lessons=include_new_lessons,
+        )
+        last_sync = None
+        try:
+            rows = db.execute(
+                """
+                select finished_at, status, counts
+                from sync_runs
+                where status = 'ok'
+                order by id desc
+                limit 1
+                """,
+                fetch=True,
+            )
+            if rows:
+                finished_at, status, counts = rows[0]
+                last_sync = {
+                    "finished_at": finished_at,
+                    "status": status,
+                    "counts": counts,
+                }
+        except Exception:
+            last_sync = None
+        try:
+            practice = fetch_practice_overview(db)
+        except Exception:
+            practice = None
+    return {
+        "decay": decay,
+        "runway": runway,
+        "last_sync": last_sync,
+        "practice": practice,
+    }
 
 
 class handler(BaseHTTPRequestHandler):
@@ -39,47 +91,28 @@ class handler(BaseHTTPRequestHandler):
             include_new_lessons = optional_bool(query, "include_new_lessons")
             if min_level is not None and max_level is not None and min_level > max_level:
                 raise ValueError("min_level cannot exceed max_level")
-            database_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
-            if not database_url:
-                raise ValueError("DATABASE_URL is required")
-            db = NeonClient(database_url)
-            decay = fetch_decay_map(db, min_level, max_level, limit)
-            runway = fetch_runway_plan(
-                db,
-                daily_reviews=daily_reviews,
-                include_new_lessons=include_new_lessons,
-            )
-            last_sync = None
-            try:
-                rows = db.execute(
-                    """
-                    select finished_at, status, counts
-                    from sync_runs
-                    where status = 'ok'
-                    order by id desc
-                    limit 1
-                    """,
-                    fetch=True,
+            key = _cache_key(min_level, max_level, limit, daily_reviews, include_new_lessons)
+            payload = cache.get(key, OVERVIEW_TTL)
+            cache_state = "hit"
+            if payload is None:
+                database_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
+                if not database_url:
+                    raise ValueError("DATABASE_URL is required")
+                db = NeonClient(database_url)
+                payload = build_overview(
+                    db, min_level, max_level, limit, daily_reviews, include_new_lessons,
                 )
-                if rows:
-                    finished_at, status, counts = rows[0]
-                    last_sync = {
-                        "finished_at": finished_at,
-                        "status": status,
-                        "counts": counts,
-                    }
-            except Exception:
-                last_sync = None
-            try:
-                practice = fetch_practice_overview(db)
-            except Exception:
-                practice = None
-            respond(self, 200, {
-                "decay": decay,
-                "runway": runway,
-                "last_sync": last_sync,
-                "practice": practice,
-            })
+                cache.put(key, payload)
+                cache_state = "miss"
+            respond(
+                self,
+                200,
+                payload,
+                extra_headers={
+                    "Cache-Control": "private, max-age=20",
+                    "X-Kani-Cache": cache_state,
+                },
+            )
         except (TypeError, ValueError) as exc:
             respond(self, 400, {"error": str(exc)})
         except Exception as exc:

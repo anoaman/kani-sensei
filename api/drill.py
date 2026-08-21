@@ -14,6 +14,7 @@ import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.auth import is_authorized, query_params, read_json_body
+from shared.cache import clear as clear_cache
 from shared.drill import (
     fetch_practice_overview,
     get_drill,
@@ -41,14 +42,15 @@ class handler(BaseHTTPRequestHandler):
         action = (query.get("action", [None])[0] or "").lower()
         try:
             db = self._db()
-            if action == "stats":
-                respond(self, 200, fetch_practice_overview(db))
-                return
-            session_id = query.get("session_id", [None])[0]
-            if not session_id:
-                respond(self, 400, {"error": "session_id is required"})
-                return
-            respond(self, 200, get_drill(db, session_id))
+            with db.reuse():
+                if action == "stats":
+                    respond(self, 200, fetch_practice_overview(db))
+                    return
+                session_id = query.get("session_id", [None])[0]
+                if not session_id:
+                    respond(self, 400, {"error": "session_id is required"})
+                    return
+                respond(self, 200, get_drill(db, session_id))
         except ValueError as exc:
             respond(self, 404, {"error": str(exc)})
         except Exception as exc:
@@ -64,42 +66,44 @@ class handler(BaseHTTPRequestHandler):
         try:
             body = read_json_body(self)
             db = self._db()
-            if action == "answer":
-                session_id = body.get("session_id")
-                question_id = body.get("question_id")
-                if session_id is None or question_id is None:
-                    raise ValueError("session_id and question_id are required")
-                result = grade_drill_answer(
-                    db,
-                    session_id,
-                    question_id,
-                    choice_index=body.get("choice_index"),
-                    text=body.get("text"),
-                    gave_up=bool(body.get("gave_up")),
-                )
-                respond(self, 200, result)
-                return
+            with db.reuse():
+                if action == "answer":
+                    session_id = body.get("session_id")
+                    question_id = body.get("question_id")
+                    if session_id is None or question_id is None:
+                        raise ValueError("session_id and question_id are required")
+                    result = grade_drill_answer(
+                        db,
+                        session_id,
+                        question_id,
+                        choice_index=body.get("choice_index"),
+                        text=body.get("text"),
+                        gave_up=bool(body.get("gave_up")),
+                    )
+                    clear_cache()
+                    respond(self, 200, result)
+                    return
 
-            min_level = int(body.get("min_level"))
-            max_level = int(body.get("max_level"))
-            count = int(body.get("count", 10))
-            modes = body.get("modes") or ["meaning", "reading"]
-            if not isinstance(modes, list):
-                raise ValueError("modes must be a list")
-            if min_level < 1 or max_level > 60:
-                raise ValueError("levels must be between 1 and 60")
-            if min_level > max_level:
-                raise ValueError("min_level cannot exceed max_level")
-            drill = start_drill(
-                db,
-                min_level,
-                max_level,
-                count=count,
-                modes=modes,
-                kind=body.get("kind") or "recall",
-                pool=body.get("pool") or "decay",
-                object_types=body.get("object_types"),
-            )
+                min_level = int(body.get("min_level"))
+                max_level = int(body.get("max_level"))
+                count = int(body.get("count", 10))
+                modes = body.get("modes") or ["meaning", "reading"]
+                if not isinstance(modes, list):
+                    raise ValueError("modes must be a list")
+                if min_level < 1 or max_level > 60:
+                    raise ValueError("levels must be between 1 and 60")
+                if min_level > max_level:
+                    raise ValueError("min_level cannot exceed max_level")
+                drill = start_drill(
+                    db,
+                    min_level,
+                    max_level,
+                    count=count,
+                    modes=modes,
+                    kind=body.get("kind") or "recall",
+                    pool=body.get("pool") or "decay",
+                    object_types=body.get("object_types"),
+                )
             respond(self, 200, drill)
         except (TypeError, ValueError, KeyError) as exc:
             respond(self, 400, {"error": str(exc)})

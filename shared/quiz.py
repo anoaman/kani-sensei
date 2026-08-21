@@ -12,7 +12,7 @@ import random
 import uuid
 from datetime import datetime, timezone
 
-from shared.decay_map import classify_item
+from shared.decay_map import classify_item, snapshots_ready
 
 
 ALLOWED_OBJECT_TYPES = ("kanji", "vocabulary", "radical", "kana_vocabulary")
@@ -34,18 +34,18 @@ select
     r.meaning_correct, r.meaning_incorrect,
     r.reading_correct, r.reading_incorrect,
     a.srs_stage, a.available_at, a.burned_at,
-    prev.srs_stage as prev_srs_stage
+    prev.prev_srs_stage
 from wk_subjects s
 join wk_review_stats r on r.subject_id = s.id
 left join wk_assignments a on a.subject_id = s.id
-left join lateral (
-    select snap.srs_stage
-    from wk_assignment_snapshots snap
-    where snap.subject_id = s.id
-      and snap.snap_date < current_date
-    order by snap.snap_date desc
-    limit 1
-) prev on true
+left join (
+    select distinct on (subject_id)
+        subject_id,
+        srs_stage as prev_srs_stage
+    from wk_assignment_snapshots
+    where snap_date < current_date
+    order by subject_id, snap_date desc
+) prev on prev.subject_id = s.id
 where s.object_type = any(%s)
   and s.characters is not null
   and s.characters <> ''
@@ -432,10 +432,8 @@ def persist_quiz(db, quiz):
 def fetch_pool(db, min_level, max_level, object_types=None):
     types = normalize_object_types(object_types)
     params = [types, min_level, max_level]
-    try:
-        return db.execute(QUIZ_POOL_QUERY, params, fetch=True)
-    except Exception:
-        return db.execute(QUIZ_POOL_QUERY_LEGACY, params, fetch=True)
+    sql = QUIZ_POOL_QUERY if snapshots_ready(db) else QUIZ_POOL_QUERY_LEGACY
+    return db.execute(sql, params, fetch=True)
 
 
 def start_quiz(

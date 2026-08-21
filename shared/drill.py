@@ -14,8 +14,6 @@ from datetime import datetime, timezone
 
 from shared.inspect import fetch_inspect
 from shared.quiz import (
-    _accepted_meanings,
-    _accepted_readings,
     build_question,
     choose_prompt_type,
     enrich_pool_row,
@@ -88,9 +86,23 @@ SCHEMA_STATEMENTS = (
 )
 
 
+_SCHEMA_READY = False
+
+
 def ensure_schema(db):
+    """Create drill tables if needed. Skip after the first successful check."""
+    global _SCHEMA_READY
+    if _SCHEMA_READY:
+        return
+    try:
+        if db.has_relation("public.drill_sessions"):
+            _SCHEMA_READY = True
+            return
+    except Exception:
+        pass
     for statement in SCHEMA_STATEMENTS:
         db.execute(statement)
+    _SCHEMA_READY = True
 
 
 def leech_score(item):
@@ -659,6 +671,7 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
             "meanings": accepted if prompt_type == "meaning" else [],
             "readings": accepted if prompt_type == "reading" else [],
             "answer": correct_answer,
+            "subject_id": subject_id,
         },
         "score": {
             "correct": new_correct,
@@ -671,30 +684,19 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
 
 
 def _hydrate_reveal(db, payload):
-    """Fill meaning/reading reveal plus a teaching card after grading."""
-    try:
-        rows = db.execute(
-            """
-            select q.subject_id, s.primary_meaning, s.meanings, s.readings
-            from drill_questions q
-            join wk_subjects s on s.id = q.subject_id
-            where q.id = %s::uuid
-            """,
-            [payload["question_id"]],
-            fetch=True,
-        )
-    except Exception:
+    """Attach a teaching card after grading. Meanings/readings come with it."""
+    subject_id = (payload.get("reveal") or {}).get("subject_id")
+    if not subject_id:
         return payload
-    if not rows:
-        return payload
-    subject_id, primary, meanings_raw, readings_raw = rows[0]
-    payload["reveal"]["meaning"] = primary
-    payload["reveal"]["meanings"] = _accepted_meanings(meanings_raw, primary)[:4]
-    payload["reveal"]["readings"] = _accepted_readings(readings_raw)[:4]
-    payload["reveal"]["subject_id"] = subject_id
     try:
         card = fetch_inspect(db, subject_id)
         payload["inspect"] = card
+        payload["reveal"]["meaning"] = card.get("meaning") or payload["reveal"].get("meaning")
+        if card.get("meanings"):
+            payload["reveal"]["meanings"] = card["meanings"][:4]
+        payload["reveal"]["readings"] = [
+            item["reading"] for item in (card.get("readings") or [])
+        ][:4]
         payload["reveal"]["wk_url"] = card.get("wk_url")
         payload["reveal"]["audio_url"] = card.get("audio_url")
         payload["reveal"]["readings_labeled"] = card.get("readings") or []

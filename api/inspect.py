@@ -38,7 +38,8 @@ class handler(BaseHTTPRequestHandler):
             if not database_url:
                 raise ValueError("DATABASE_URL is required")
             db = NeonClient(database_url)
-            respond(self, 200, fetch_inspect(db, subject_id))
+            with db.reuse():
+                respond(self, 200, fetch_inspect(db, subject_id))
         except ValueError as exc:
             respond(self, 404, {"error": str(exc)})
         except Exception as exc:

@@ -192,6 +192,30 @@ class QuizTests(unittest.TestCase):
         self.assertTrue(all(q["object_type"] == "radical" for q in quiz["questions"]))
         self.assertTrue(all(q["prompt_type"] == "meaning" for q in quiz["questions"]))
 
+    def test_fetch_pool_uses_legacy_sql_when_snapshots_missing(self):
+        from shared import decay_map
+        from shared.quiz import fetch_pool
+
+        decay_map._SNAPSHOTS_READY = False
+        seen = []
+
+        class Fake:
+            def execute(self, sql, args=None, fetch=False):
+                seen.append(sql)
+                return []
+
+        fetch_pool(Fake(), 1, 10, ["kanji"])
+        decay_map._SNAPSHOTS_READY = None
+        self.assertEqual(len(seen), 1)
+        self.assertIn("null::integer as prev_srs_stage", seen[0])
+        self.assertNotIn("distinct on", seen[0].lower())
+
+    def test_quiz_pool_query_uses_distinct_on_not_lateral(self):
+        sql = QUIZ_POOL_QUERY.lower()
+        self.assertIn("distinct on (subject_id)", sql)
+        self.assertNotIn("lateral", sql)
+        self.assertNotIn("lateral", QUIZ_POOL_QUERY_LEGACY.lower())
+
 
 class AuthTests(unittest.TestCase):
     def test_token_roundtrip(self):
