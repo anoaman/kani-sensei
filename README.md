@@ -1,13 +1,28 @@
 # Kani Sensei
 
-WaniKani nudge bot — sends Telegram messages when reviews are piling up.
+A focused WaniKani recovery companion. Kani Sensei turns a large review pile
+into one short recommended session, while still allowing deliberate practice by
+level and subject type.
+
+The product has three user-facing areas:
+
+- **Today** — one decay-weighted daily prescription and a direct path to WaniKani.
+- **Practice** — choose a single level or range, Kanji/Vocabulary/Radicals/Mixed,
+  and a 10–40 question session.
+- **Progress** — recovery summary and the levels under the most pressure.
+
+Ghosts, leeches, due items, and prior misses remain part of the drill engine,
+but are no longer separate destinations competing for attention.
 
 ## Endpoints
 
 | Endpoint | Method | Auth | Description |
 |---|---|---|---|
-| `/` | GET | cookie after login | Web UI — Decay Map, Runway, Warm-Up, Kanji/Vocab tests |
-| `/kanji` `/vocab` `/ghosts` `/leeches` `/dojo` | GET | cookie | Interactive drills (typed recall by default) |
+| `/` | GET | cookie after login | Today — recommended recovery session |
+| `/practice` | GET | cookie | Focused-session builder |
+| `/session` | GET | cookie | Unified typed-recall session |
+| `/progress` | GET | cookie | Recovery summary and level pressure |
+| Legacy practice URLs | GET | cookie | Redirect into the simplified Practice experience |
 | `/api/login` | POST | site password body | Issue session cookie |
 | `/api/logout` | POST | — | Clear session cookie |
 | `/api/me` | GET | cookie / secret | Auth status |
