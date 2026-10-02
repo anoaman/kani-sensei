@@ -1,105 +1,46 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
-import GlossaryView from "./GlossaryView.jsx";
-import InspectCard from "./InspectCard.jsx";
-import { T } from "./Term.jsx";
 import TestView from "./TestView.jsx";
 
-const CATEGORIES = [
-  { id: "vocab", label: "Vocab", objectTypes: ["vocabulary"], term: "vocabulary" },
-  { id: "radicals", label: "Radicals", objectTypes: ["radical"], term: "radical" },
-  { id: "kanji", label: "Kanji", objectTypes: ["kanji"], term: "kanji" },
-];
-
-const VIEWS = [
-  { id: "home", label: "Home", path: "/" },
+const OVERVIEW_CACHE_KEY = "kani-overview-v2";
+const FOCUS_KEY = "kani-focus-v1";
+const NAV = [
+  { id: "today", label: "Today", path: "/" },
   { id: "practice", label: "Practice", path: "/practice" },
-  { id: "decay", label: "Map", path: "/decay" },
-  { id: "runway", label: "Runway", path: "/runway" },
-  { id: "glossary", label: "Glossary", path: "/glossary" },
+  { id: "progress", label: "Progress", path: "/progress" },
 ];
 
-const STUDY_VIEWS = new Set([
-  "practice", "quiz", "kanji", "vocab", "ghosts", "leeches", "dojo", "drill",
-]);
-
-const PATHS = {
-  home: "/",
-  decay: "/decay",
-  runway: "/runway",
-  quiz: "/warmup",
-  kanji: "/kanji",
-  vocab: "/vocab",
-  ghosts: "/ghosts",
-  leeches: "/leeches",
-  dojo: "/dojo",
-  practice: "/practice",
-  drill: "/drill",
-  glossary: "/glossary",
-};
-
-function pathForView(viewId) {
-  return PATHS[viewId] || "/";
-}
-
-function viewFromPath(pathname) {
-  if (pathname.startsWith("/kanji")) return "kanji";
-  if (pathname.startsWith("/vocab")) return "vocab";
-  if (pathname.startsWith("/ghosts")) return "ghosts";
-  if (pathname.startsWith("/leeches")) return "leeches";
-  if (pathname.startsWith("/dojo")) return "dojo";
-  if (pathname.startsWith("/decay")) return "decay";
-  if (pathname.startsWith("/runway")) return "runway";
-  if (pathname.startsWith("/warmup")) return "quiz";
-  if (pathname.startsWith("/practice")) return "practice";
-  if (pathname.startsWith("/drill")) return "drill";
-  if (pathname.startsWith("/glossary")) return "glossary";
-  return "home";
-}
-
-function formatDate(value) {
-  if (!value) return "—";
+function readCache() {
   try {
-    return new Date(value).toLocaleString(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
-  } catch {
-    return String(value);
-  }
-}
-
-const OVERVIEW_CACHE_KEY = "kani-overview-v1";
-
-function readCachedOverview() {
-  try {
-    const raw = sessionStorage.getItem(OVERVIEW_CACHE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    return JSON.parse(sessionStorage.getItem(OVERVIEW_CACHE_KEY)) || null;
   } catch {
     return null;
   }
 }
 
-function writeCachedOverview(payload) {
+function writeCache(value) {
   try {
-    sessionStorage.setItem(OVERVIEW_CACHE_KEY, JSON.stringify(payload));
+    sessionStorage.setItem(OVERVIEW_CACHE_KEY, JSON.stringify(value));
   } catch {
-    /* quota / private mode */
+    /* private mode */
   }
 }
 
-function clearCachedOverview() {
-  try {
-    sessionStorage.removeItem(OVERVIEW_CACHE_KEY);
-  } catch {
-    /* ignore */
-  }
+function viewFromPath(pathname) {
+  if (pathname.startsWith("/session") || pathname.startsWith("/drill")) return "session";
+  if (pathname.startsWith("/progress") || pathname.startsWith("/decay") || pathname.startsWith("/runway")) return "progress";
+  if (
+    pathname.startsWith("/practice") || pathname.startsWith("/kanji") ||
+    pathname.startsWith("/vocab") || pathname.startsWith("/ghosts") ||
+    pathname.startsWith("/leeches") || pathname.startsWith("/dojo") ||
+    pathname.startsWith("/warmup") || pathname.startsWith("/glossary")
+  ) return "practice";
+  return "today";
 }
 
-function NavLabel({ id, label }) {
-  if (id === "decay") return <T k="decay" hoverOnly>{label}</T>;
-  if (id === "runway") return <T k="runway" hoverOnly>{label}</T>;
-  return label;
+function formatSync(value) {
+  if (!value) return "Waiting for first sync";
+  return `Synced ${new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 }
 
 function Login({ onReady }) {
@@ -122,963 +63,246 @@ function Login({ onReady }) {
   }
 
   return (
-    <div className="login-shell">
-      <div className="login-card surface">
+    <main className="login-shell">
+      <form className="login-card surface" onSubmit={submit}>
+        <p className="kicker">WaniKani recovery companion</p>
         <h1>Kani Sensei</h1>
-        <p>
-          Re-entry for the pile you left behind. Sign in to open the{" "}
-          <T k="decay">Decay Map</T>.
+        <p>Come back without fighting the whole pile at once.</p>
+        <label className="sr-only" htmlFor="site-password">Site password</label>
+        <input id="site-password" type="password" autoFocus autoComplete="current-password" placeholder="Site password" value={password} onChange={(event) => setPassword(event.target.value)} />
+        {error ? <div className="error">{error}</div> : null}
+        <button className="primary-btn" disabled={busy || !password}>{busy ? "Opening…" : "Enter"}</button>
+      </form>
+    </main>
+  );
+}
+
+function Today({ data, navigate }) {
+  const summary = data?.decay?.summary || {};
+  const levels = summary.suggested_levels || [];
+  const count = Math.min(20, Math.max(10, Number(summary.high_risk || 0) + Number(summary.medium_risk || 0) || 12));
+  const min = levels.length ? Math.min(...levels) : 1;
+  const max = levels.length ? Math.max(...levels) : Math.max(1, min);
+  const minutes = Math.max(4, Math.ceil(count * 0.55));
+
+  return (
+    <main className="today-view">
+      <section className="prescription">
+        <p className="kicker">Today’s prescription</p>
+        <h1>{count} items worth fixing.</h1>
+        <p className="lede">
+          Start with levels {min === max ? min : `${min}–${max}`}. The weakest kanji and vocabulary come first.
         </p>
-        <form onSubmit={submit}>
-          <input
-            type="password"
-            autoFocus
-            autoComplete="current-password"
-            placeholder="Site password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          {error ? <div className="error">{error}</div> : null}
-          <button className="primary-btn" type="submit" disabled={busy || !password}>
-            {busy ? "Opening…" : "Enter"}
+        <div className="action-row">
+          <button className="primary-btn large" onClick={() => navigate("session", { min, max, count, types: "kanji,vocabulary", pool: "decay", go: 1 })}>
+            Start today’s session
           </button>
-        </form>
-      </div>
-    </div>
+          <button className="text-btn" onClick={() => navigate("practice")}>Choose focus</button>
+        </div>
+        <p className="session-note">About {minutes} minutes · meaning + reading · typed recall</p>
+      </section>
+
+      <section className="status-strip" aria-label="Current recovery status">
+        <div><span>Due in 24h</span><strong>{data?.runway?.current_backlog ?? "—"}</strong></div>
+        <div><span>Needs attention</span><strong>{Number(summary.high_risk || 0) + Number(summary.medium_risk || 0)}</strong></div>
+        <div><span>Recovery</span><strong>{(data?.runway?.burn_status || "steady").replaceAll("_", " ")}</strong></div>
+      </section>
+
+      <section className="next-step">
+        <div>
+          <p className="kicker">After this session</p>
+          <h2>Take the warm-up into WaniKani.</h2>
+          <p>Kani Sensei finds the soft spots. WaniKani remains the source of truth for your reviews.</p>
+        </div>
+        <a className="secondary-btn" href="https://www.wanikani.com/subjects/review" target="_blank" rel="noreferrer">Open WaniKani</a>
+      </section>
+    </main>
   );
 }
 
-function Home({ data, onNavigate, onInspect }) {
+function readFocus() {
+  const fallback = { levelMode: "single", min: 1, max: 1, type: "kanji", count: 10 };
+  try {
+    return { ...fallback, ...JSON.parse(localStorage.getItem(FOCUS_KEY)) };
+  } catch {
+    return fallback;
+  }
+}
+
+function Practice({ data, navigate }) {
+  const [focus, setFocus] = useState(readFocus);
   const suggested = data?.decay?.summary?.suggested_levels || [];
-  const runway = data?.runway;
-  const practice = data?.practice || {};
-  return (
-    <section className="hero panel">
-      <div className="hero-wash" aria-hidden="true" />
-      <h1 className="hero-brand">Kani Sensei</h1>
-      <p>
-        The <T k="queue">queue</T> looks huge because it is. Start with what
-        actually rotted, type it the way <T k="wanikani">WaniKani</T> will ask,
-        then burn the rest at a pace you can keep.
-      </p>
-      <div className="hero-actions">
-        <button className="primary-btn" onClick={() => onNavigate("dojo")}>
-          Daily <T k="dojo" hoverOnly>dojo</T>
-        </button>
-        <button className="ghost-btn" onClick={() => onNavigate("kanji")}>
-          <T k="kanji" hoverOnly>Kanji</T> test
-        </button>
-        <button className="ghost-btn" onClick={() => onNavigate("vocab")}>
-          <T k="vocabulary" hoverOnly>Vocab</T> test
-        </button>
-        <button className="ghost-btn" onClick={() => onNavigate("practice")}>
-          All practice
-        </button>
-      </div>
-      {suggested.length ? (
-        <div className="chips" style={{ marginTop: "1.1rem" }}>
-          {suggested.map((level) => (
-            <button
-              key={level}
-              type="button"
-              className="chip"
-              onClick={() => onNavigate("drill", { min: level, max: level, go: 1, types: "kanji,vocabulary" })}
-            >
-              Drill lv {level}
-            </button>
-          ))}
-          <a className="chip" href="https://www.wanikani.com/subjects/review" target="_blank" rel="noreferrer">
-            Open WK reviews
-          </a>
-        </div>
-      ) : null}
-      <div className="metric-row" style={{ marginTop: "2rem" }}>
-        <div className="metric">
-          <span className="label">
-            Suggested <T k="level">levels</T>
-          </span>
-          <span className="value">
-            {suggested.length ? suggested.slice(0, 3).join(" · ") : "—"}
-          </span>
-        </div>
-        <div className="metric">
-          <span className="label">
-            <T k="backlog">Backlog</T> (24h)
-          </span>
-          <span className="value">{runway?.current_backlog ?? "—"}</span>
-        </div>
-        <div className="metric">
-          <span className="label">
-            <T k="burned">Burn</T> status
-          </span>
-          <span className="value" style={{ fontSize: "1.35rem" }}>
-            {(runway?.burn_status || "—").replaceAll("_", " ")}
-          </span>
-        </div>
-      </div>
-      <div className="practice-grid">
-        <button className="practice-card" onClick={() => onNavigate("ghosts")}>
-          <span className="eyebrow">
-            <T k="ghost" hoverOnly>Ghost reviews</T>
-          </span>
-          <strong>
-            {practice.burned ?? "—"} <T k="burned" hoverOnly>burned</T>
-          </strong>
-          <p>WK never resurfaces these. We will, so they don&apos;t silently rot.</p>
-        </button>
-        <button className="practice-card" onClick={() => onNavigate("leeches")}>
-          <span className="eyebrow">
-            <T k="leech" hoverOnly>Leech clinic</T>
-          </span>
-          <strong>
-            {practice.leeches ?? "—"} <T k="leech" hoverOnly>leeches</T>
-          </strong>
-          <p>
-            Chronic misses. Drill them here so the real <T k="queue" hoverOnly>queue</T>{" "}
-            stops eating you.
-          </p>
-        </button>
-        <button className="practice-card" onClick={() => onNavigate("kanji")}>
-          <span className="eyebrow">This week&apos;s drills</span>
-          <strong>
-            {practice.week_accuracy != null ? `${practice.week_accuracy}%` : "—"}
-          </strong>
-          <p>
-            {practice.week_sessions
-              ? `${practice.week_sessions} sessions · best `
-              : "No Sensei drills yet this week. Open a test."}
-            {practice.week_sessions ? (
-              <T k="combo" hoverOnly>
-                combo {practice.combo_best || 0}
-              </T>
-            ) : null}
-          </p>
-        </button>
-      </div>
-      {practice.notebook?.length ? (
-        <div className="surface notebook">
-          <strong>
-            <T k="notebook">Sensei notebook</T>
-          </strong>
-          <div className="item-list" style={{ marginTop: "0.85rem" }}>
-            {practice.notebook.map((item) => (
-              <button
-                type="button"
-                className="item item-btn"
-                key={item.subject_id}
-                onClick={() => onInspect?.(item.subject_id)}
-              >
-                <div className="glyph">{item.characters}</div>
-                <div>
-                  <div>{item.meaning || "—"}</div>
-                  <div className="meta">
-                    Lv {item.level} · {item.type} · missed {item.miss_count}
-                    {item.hit_count ? ` · recovered ${item.hit_count}` : ""}
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </section>
-  );
-}
 
-function DecayView({ data, onNavigate, onInspect }) {
-  const decay = data?.decay;
-  if (!decay) return <div className="empty">Loading decay map…</div>;
-  const maxRisk = Math.max(1, ...(decay.levels || []).map((l) => l.risk || 0));
-
-  return (
-    <section className="panel">
-      <div className="section-head">
-        <div>
-          <h2>
-            <T k="decay">Decay Map</T>
-          </h2>
-          <p>
-            What looks soft in the current snapshot — ranked so you know where
-            to start, not where to panic. Click a <T k="level">level</T> to drill
-            it, or an item to <T k="inspect">inspect</T> how it is built.
-          </p>
-        </div>
-      </div>
-      <div className="grid-2">
-        <div className="surface">
-          <div className="metric-row">
-            <div className="metric">
-              <span className="label">Mapped</span>
-              <span className="value">{decay.summary.items}</span>
-            </div>
-            <div className="metric">
-              <span className="label">
-                <T k="due">Due</T>
-              </span>
-              <span className="value">{decay.summary.due}</span>
-            </div>
-            <div className="metric">
-              <span className="label">
-                <T k="regression">Regressed</T>
-              </span>
-              <span className="value">{decay.summary.regressed ?? 0}</span>
-            </div>
-          </div>
-          <div className="level-list">
-            {(decay.levels || []).slice(0, 12).map((level) => (
-              <button
-                type="button"
-                className="level-row level-btn"
-                key={level.level}
-                onClick={() => onNavigate("drill", {
-                  min: level.level, max: level.level, go: 1, types: "kanji,vocabulary",
-                })}
-              >
-                <strong>Lv {level.level}</strong>
-                <div className="bar">
-                  <div
-                    className="fill"
-                    style={{ width: `${Math.max(8, (level.risk / maxRisk) * 100)}%` }}
-                  />
-                </div>
-                <span className="muted">{level.risk}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="surface">
-          <strong>Highest pressure items</strong>
-          <div className="item-list" style={{ marginTop: "0.85rem" }}>
-            {(decay.items || []).slice(0, 10).map((item) => (
-              <button
-                type="button"
-                className="item item-btn"
-                key={item.subject_id}
-                onClick={() => onInspect?.(item.subject_id)}
-              >
-                <div className="glyph">{item.characters}</div>
-                <div>
-                  <div>{item.meaning || "—"}</div>
-                  <div className="meta">
-                    Lv {item.level} · {item.type} · <T k="srs" hoverOnly>SRS</T>{" "}
-                    {item.srs_stage}
-                    {item.regressed ? (
-                      <>
-                        {" "}
-                        · <T k="regression" hoverOnly>dropped</T>
-                      </>
-                    ) : (
-                      ""
-                    )}
-                  </div>
-                </div>
-                <div className={`band ${item.band}`}>{item.band}</div>
-              </button>
-            ))}
-          </div>
-          <p className="note" style={{ marginTop: "1rem" }}>
-            Signal: {decay.signal}
-            {(decay.limitations || []).slice(0, 1).map((line) => (
-              <span key={line}>
-                <br />
-                {line}
-              </span>
-            ))}
-          </p>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function RunwayView({ data, onNavigate }) {
-  const runway = data?.runway;
-  if (!runway) return <div className="empty">Loading runway…</div>;
-  const stages = runway.apprentice_breakdown || {};
-
-  return (
-    <section className="panel">
-      <div className="section-head">
-        <div>
-          <h2>
-            <T k="runway">Runway</T>
-          </h2>
-          <p>
-            Hold a daily pace and this is when the pile stops feeling like a
-            cliff.
-          </p>
-        </div>
-      </div>
-      <div className="surface">
-        <div className="metric-row">
-          <div className="metric">
-            <span className="label">
-              <T k="backlog">Backlog</T>
-            </span>
-            <span className="value">{runway.current_backlog}</span>
-          </div>
-          <div className="metric">
-            <span className="label">Steady load</span>
-            <span className="value">{runway.daily_load}</span>
-          </div>
-          <div className="metric">
-            <span className="label">Recommended</span>
-            <span className="value">{runway.recommended_daily}</span>
-          </div>
-        </div>
-        <div className="metric-row" style={{ marginTop: "0.5rem" }}>
-          <div className="metric">
-            <span className="label">Status</span>
-            <span className="value" style={{ fontSize: "1.35rem" }}>
-              {String(runway.burn_status || "").replaceAll("_", " ")}
-            </span>
-          </div>
-          <div className="metric">
-            <span className="label">Days to healthy</span>
-            <span className="value">
-              {runway.projected_days_to_healthy ?? "—"}
-            </span>
-          </div>
-          <div className="metric">
-            <span className="label">Confidence</span>
-            <span className="value" style={{ fontSize: "1.35rem" }}>
-              {runway.confidence}
-            </span>
-          </div>
-        </div>
-        <div className="level-list" style={{ marginTop: "1.25rem" }}>
-          {[1, 2, 3, 4].map((stage) => (
-            <div className="level-row" key={stage}>
-              <strong>
-                <T k="apprentice" hoverOnly>
-                  App {stage}
-                </T>
-              </strong>
-              <div className="bar">
-                <div
-                  className="fill"
-                  style={{
-                    width: `${Math.min(100, (stages[stage] || 0) * 4)}%`,
-                    background: "linear-gradient(90deg, #3a4a5c, #122033)",
-                  }}
-                />
-              </div>
-              <span className="muted">{stages[stage] || 0}</span>
-            </div>
-          ))}
-        </div>
-        <p className="note" style={{ marginTop: "1rem" }}>
-          {runway.confidence_note}
-          {(runway.warnings || []).slice(0, 2).map((w) => (
-            <span key={w}>
-              <br />
-              {w}
-            </span>
-          ))}
-        </p>
-        <div className="hero-actions" style={{ marginTop: "1.1rem" }}>
-          <a className="primary-btn" href="https://www.wanikani.com/subjects/review" target="_blank" rel="noreferrer">
-            Open WaniKani reviews
-          </a>
-          <button className="ghost-btn" onClick={() => onNavigate?.("drill", { pool: "due", go: 1, types: "kanji,vocabulary" })}>
-            Drill what’s due
-          </button>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function PracticeHub({ data, onNavigate }) {
-  const practice = data?.practice || {};
-  const cards = [
-    { id: "dojo", title: "Daily dojo", value: "12 typed", note: "Decay-weighted, no setup.", term: "dojo" },
-    { id: "kanji", title: "Kanji test", value: "Type it", note: "Meaning and reading, WK motion.", term: "kanji" },
-    { id: "vocab", title: "Vocab test", value: "Type it", note: "Compounds that went soft.", term: "vocabulary" },
-    { id: "ghosts", title: "Ghost reviews", value: practice.burned ?? "—", note: "Burned items WK never shows.", term: "ghost" },
-    { id: "leeches", title: "Leech clinic", value: practice.leeches ?? "—", note: "Chronic misses, isolated.", term: "leech" },
-    { id: "quiz", title: "Warm-up", value: "MC", note: "Four choices when recall is too sharp.", term: "warmup" },
-  ];
-  return (
-    <section className="panel">
-      <div className="section-head">
-        <div>
-          <h2>Practice</h2>
-          <p>
-            Pick a drill. <T k="recall">Typed recall</T> is the default because
-            that&apos;s what the real <T k="queue">queue</T> asks for.
-          </p>
-        </div>
-      </div>
-      <div className="practice-grid practice-grid-wide">
-        {cards.map((card) => (
-          <button key={card.id} className="practice-card" onClick={() => onNavigate(card.id)}>
-            <span className="eyebrow">
-              <T k={card.term} hoverOnly>
-                {card.title}
-              </T>
-            </span>
-            <strong>{card.value}</strong>
-            <p>{card.note}</p>
-          </button>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function CategoryTabs({ value, onChange, disabled }) {
-  return (
-    <div className="category-tabs" role="tablist" aria-label="Test category">
-      {CATEGORIES.map((category) => (
-        <button
-          key={category.id}
-          type="button"
-          role="tab"
-          aria-selected={value === category.id}
-          className={value === category.id ? "active" : ""}
-          disabled={disabled}
-          onClick={() => onChange(category.id)}
-        >
-          {category.term ? (
-            <T k={category.term} hoverOnly>
-              {category.label}
-            </T>
-          ) : (
-            category.label
-          )}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function QuizView({
-  data,
-  title = "Warm-Up Quiz",
-  blurb = (
-    <>
-      Multiple-choice drills weighted toward <T k="decay">Decay Map</T> pressure —
-      get comfortable before you touch the real <T k="queue">queue</T>.
-    </>
-  ),
-  defaultCategory = "vocab",
-  finishNote = "Warm-up complete. Take that feeling into the real reviews.",
-}) {
-  const suggested = data?.decay?.summary?.suggested_levels || [];
-  const defaultMin = suggested.length ? Math.min(...suggested) : 14;
-  const defaultMax = suggested.length ? Math.max(...suggested) : 18;
-
-  const [category, setCategory] = useState(defaultCategory);
-  const [minLevel, setMinLevel] = useState(defaultMin);
-  const [maxLevel, setMaxLevel] = useState(defaultMax);
-  const [count, setCount] = useState(10);
-  const [mode, setMode] = useState("both");
-  const [session, setSession] = useState(null);
-  const [index, setIndex] = useState(0);
-  const [feedback, setFeedback] = useState(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    setCategory(defaultCategory);
-  }, [defaultCategory]);
-
-  useEffect(() => {
-    if (!session) {
-      setMinLevel(defaultMin);
-      setMaxLevel(defaultMax);
-    }
-  }, [defaultMin, defaultMax, session]);
-
-  useEffect(() => {
-    if (category === "radicals" && mode !== "meaning") {
-      setMode("meaning");
-    }
-  }, [category, mode]);
-
-  const question = session?.questions?.[index] || null;
-  const finished = feedback?.score?.finished;
-  const selectedCategory =
-    CATEGORIES.find((item) => item.id === category) || CATEGORIES[0];
-
-  async function start() {
-    setBusy(true);
-    setError("");
-    setFeedback(null);
-    try {
-      const modes =
-        category === "radicals"
-          ? ["meaning"]
-          : mode === "both"
-            ? ["meaning", "reading"]
-            : mode === "meaning"
-              ? ["meaning"]
-              : ["reading"];
-      const quiz = await api.startQuiz({
-        min_level: Number(minLevel),
-        max_level: Number(maxLevel),
-        count: Number(count),
-        modes,
-        object_types: selectedCategory.objectTypes,
-      });
-      setSession(quiz);
-      setIndex(0);
-    } catch (err) {
-      setError(err.message || "Could not start quiz");
-    } finally {
-      setBusy(false);
-    }
+  function update(key, value) {
+    setFocus((current) => ({ ...current, [key]: value }));
   }
 
-  async function answer(choiceIndex) {
-    if (!session || !question || feedback) return;
-    setBusy(true);
-    setError("");
-    try {
-      const result = await api.answerQuiz({
-        session_id: session.session_id,
-        question_id: question.id,
-        choice_index: choiceIndex,
-      });
-      setFeedback(result);
-    } catch (err) {
-      setError(err.message || "Could not grade answer");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function next() {
-    if (!session) return;
-    if (feedback?.score?.finished) {
-      setSession(null);
-      setFeedback(null);
-      setIndex(0);
-      return;
-    }
-    setIndex((value) => value + 1);
-    setFeedback(null);
+  function start() {
+    const next = {
+      ...focus,
+      min: Math.max(1, Math.min(60, Number(focus.min) || 1)),
+      max: Math.max(1, Math.min(60, Number(focus.levelMode === "single" ? focus.min : focus.max) || 1)),
+    };
+    if (next.max < next.min) next.max = next.min;
+    localStorage.setItem(FOCUS_KEY, JSON.stringify(next));
+    const types = next.type === "mixed" ? "radical,kanji,vocabulary" : next.type;
+    navigate("session", { min: next.min, max: next.max, count: next.count, types, pool: "decay", go: 1 });
   }
 
   return (
-    <section className="panel">
-      <div className="section-head">
-        <div>
-          <h2>{title}</h2>
-          <p>{blurb}</p>
-        </div>
-      </div>
+    <main className="practice-view">
+      <header className="page-intro">
+        <p className="kicker">Practice</p>
+        <h1>Choose what to work on.</h1>
+        <p>Sensei recommends the daily session. This is where you take control.</p>
+      </header>
 
-      {!session ? (
-        <div className="surface">
-          <CategoryTabs value={category} onChange={setCategory} />
-          <div className="controls">
-            <div className="field">
-              <label>From</label>
-              <input
-                type="number"
-                min="1"
-                max="60"
-                value={minLevel}
-                onChange={(e) => setMinLevel(e.target.value)}
-              />
+      <section className="focus-builder">
+        <div className="builder-section">
+          <span className="step-number">01</span>
+          <div>
+            <h2>Level</h2>
+            <div className="segmented">
+              <button className={focus.levelMode === "single" ? "active" : ""} onClick={() => update("levelMode", "single")}>Single level</button>
+              <button className={focus.levelMode === "range" ? "active" : ""} onClick={() => update("levelMode", "range")}>Level range</button>
             </div>
-            <div className="field">
-              <label>To</label>
-              <input
-                type="number"
-                min="1"
-                max="60"
-                value={maxLevel}
-                onChange={(e) => setMaxLevel(e.target.value)}
-              />
+            <div className="level-fields">
+              <label><span>{focus.levelMode === "single" ? "Level" : "From"}</span><input type="number" min="1" max="60" value={focus.min} onChange={(event) => update("min", event.target.value)} /></label>
+              {focus.levelMode === "range" ? <label><span>To</span><input type="number" min="1" max="60" value={focus.max} onChange={(event) => update("max", event.target.value)} /></label> : null}
             </div>
-            <div className="field">
-              <label>Questions</label>
-              <input
-                type="number"
-                min="3"
-                max="30"
-                value={count}
-                onChange={(e) => setCount(e.target.value)}
-              />
-            </div>
-            <div className="field">
-              <label>
-                <T k="meaning">Meaning</T> / <T k="reading">reading</T>
-              </label>
-              <select
-                value={category === "radicals" ? "meaning" : mode}
-                onChange={(e) => setMode(e.target.value)}
-                disabled={category === "radicals"}
-              >
-                {category === "radicals" ? (
-                  <option value="meaning">Meaning only</option>
-                ) : (
-                  <>
-                    <option value="both">Meaning + reading</option>
-                    <option value="meaning">Meaning only</option>
-                    <option value="reading">Reading only</option>
-                  </>
-                )}
-              </select>
-            </div>
-            <button className="primary-btn" onClick={start} disabled={busy}>
-              {busy ? "Building…" : "Begin"}
-            </button>
+            {suggested.length ? <button className="suggestion" onClick={() => setFocus((current) => ({ ...current, levelMode: "range", min: Math.min(...suggested), max: Math.max(...suggested) }))}>Use suggested levels {suggested.join(" · ")}</button> : null}
           </div>
-          {suggested.length ? (
-            <p className="note">
-              Decay Map suggests levels {suggested.join(", ")} right now.
-            </p>
-          ) : (
-            <p className="note">
-              No loud hotspots today — still useful to warm the softer end of
-              your range.
-            </p>
-          )}
-          {error ? <div className="error">{error}</div> : null}
         </div>
-      ) : (
-        <div className="quiz-stage surface">
-          <CategoryTabs value={category} onChange={() => {}} disabled />
-          <div className="muted">
-            {selectedCategory.label} · Question {index + 1} / {session.question_count}
-            {feedback?.score
-              ? ` · Score ${feedback.score.correct}/${feedback.score.total}`
-              : ""}
-            {session.weighting?.mean_decay_score != null
-              ? ` · mean decay ${session.weighting.mean_decay_score}`
-              : ""}
-          </div>
 
-          {question ? (
-            <>
-              <div className="prompt">
-                <div className="eyebrow">
-                  {question.prompt_type} · lv {question.level} · {question.object_type}
-                </div>
-                <div className="chars" key={question.id}>
-                  {question.characters}
-                </div>
-              </div>
-              <div className="choices">
-                {question.choices.map((choice, choiceIndex) => {
-                  let className = "choice";
-                  if (feedback) {
-                    if (choiceIndex === feedback.correct_index) className += " correct";
-                    else if (choiceIndex === feedback.chosen_index && !feedback.correct) {
-                      className += " wrong";
-                    }
-                  }
-                  return (
-                    <button
-                      key={`${question.id}-${choiceIndex}`}
-                      className={className}
-                      disabled={busy || Boolean(feedback)}
-                      onClick={() => answer(choiceIndex)}
-                    >
-                      {choice}
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          ) : null}
-
-          {feedback ? (
-            <div className="reveal">
-              <strong>{feedback.correct ? "Solid." : "Not yet."}</strong>
-              {" "}
-              {feedback.reveal?.meaning}
-              {feedback.reveal?.readings?.length
-                ? ` · ${feedback.reveal.readings.join(" / ")}`
-                : ""}
-              <div style={{ marginTop: "0.85rem" }}>
-                <button className="primary-btn" onClick={next}>
-                  {finished ? "Finish" : "Next"}
+        <div className="builder-section">
+          <span className="step-number">02</span>
+          <div>
+            <h2>Content</h2>
+            <div className="option-grid">
+              {[
+                ["kanji", "Kanji", "Characters and readings"],
+                ["vocabulary", "Vocabulary", "Words and compounds"],
+                ["radical", "Radicals", "Visual building blocks"],
+                ["mixed", "Mixed", "Everything together"],
+              ].map(([id, label, note]) => (
+                <button key={id} className={focus.type === id ? "select-tile active" : "select-tile"} onClick={() => update("type", id)}>
+                  <strong>{label}</strong><span>{note}</span>
                 </button>
-              </div>
+              ))}
             </div>
-          ) : null}
-
-          {finished ? <p className="note">{finishNote}</p> : null}
-          {error ? <div className="error">{error}</div> : null}
+          </div>
         </div>
-      )}
-    </section>
+
+        <div className="builder-section">
+          <span className="step-number">03</span>
+          <div>
+            <h2>Session size</h2>
+            <div className="count-row">
+              {[10, 20, 30, 40].map((value) => <button key={value} className={Number(focus.count) === value ? "active" : ""} onClick={() => update("count", value)}>{value}</button>)}
+            </div>
+          </div>
+        </div>
+
+        <div className="builder-footer">
+          <p><strong>{focus.levelMode === "single" ? `Level ${focus.min}` : `Levels ${focus.min}–${focus.max}`}</strong> · {focus.type === "mixed" ? "Mixed content" : focus.type} · {focus.count} questions</p>
+          <button className="primary-btn large" onClick={start}>Start focused session</button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function Progress({ data, navigate }) {
+  const summary = data?.decay?.summary || {};
+  const practice = data?.practice || {};
+  const levels = data?.decay?.levels || [];
+  return (
+    <main className="progress-view">
+      <header className="page-intro">
+        <p className="kicker">Progress</p>
+        <h1>Your recovery, without the spreadsheet.</h1>
+        <p>Enough signal to choose the next session. Nothing pretending to be a science project.</p>
+      </header>
+      <section className="progress-summary">
+        <div><span>This week</span><strong>{practice.week_accuracy != null ? `${practice.week_accuracy}%` : "—"}</strong><small>{practice.week_sessions || 0} Sensei sessions</small></div>
+        <div><span>Due now</span><strong>{summary.due ?? "—"}</strong><small>across synced items</small></div>
+        <div><span>Recovered</span><strong>{practice.combo_best || 0}</strong><small>best recent combo</small></div>
+      </section>
+      <section className="level-pressure">
+        <div className="section-title"><div><p className="kicker">Level pressure</p><h2>Where memory is softest</h2></div><button className="text-btn" onClick={() => navigate("practice")}>Choose a focus</button></div>
+        <div className="pressure-list">
+          {levels.slice(0, 8).map((level) => (
+            <button key={level.level} onClick={() => navigate("session", { min: level.level, max: level.level, count: 10, types: "kanji,vocabulary", pool: "decay", go: 1 })}>
+              <span>Level {level.level}</span>
+              <span className="pressure-track"><i style={{ width: `${Math.min(100, level.risk || 0)}%` }} /></span>
+              <strong>{level.risk || 0}</strong>
+            </button>
+          ))}
+        </div>
+      </section>
+    </main>
   );
 }
 
 export default function App() {
-  const cached = useMemo(() => readCachedOverview(), []);
-  const [auth, setAuth] = useState(cached ? true : null);
+  const [auth, setAuth] = useState(null);
+  const [data, setData] = useState(readCache);
   const [view, setView] = useState(() => viewFromPath(window.location.pathname));
-  const [data, setData] = useState(cached);
-  const [loadError, setLoadError] = useState("");
   const [focus, setFocus] = useState(false);
-  const [sheet, setSheet] = useState(null);
+  const [error, setError] = useState("");
 
-  function navigate(nextView, query) {
-    setView(nextView);
-    let nextPath = pathForView(nextView);
-    if (query) {
-      const params = new URLSearchParams();
-      Object.entries(query).forEach(([key, value]) => {
-        if (value != null && value !== "") params.set(key, String(value));
-      });
-      const encoded = params.toString();
-      if (encoded) nextPath += `?${encoded}`;
-    }
-    if (`${window.location.pathname}${window.location.search}` !== nextPath) {
-      window.history.pushState({ view: nextView }, "", nextPath);
-    }
-  }
-
-  async function openInspect(subjectId) {
-    if (!subjectId) return;
+  async function load() {
+    setError("");
     try {
-      setSheet(await api.inspect(subjectId));
-    } catch (err) {
-      setLoadError(err.message || "Could not inspect subject");
-    }
-  }
-
-  async function loadOverview() {
-    setLoadError("");
-    try {
-      const overview = await api.overview({ limit: 40 });
+      const payload = await api.overview({ limit: 40 });
+      setData(payload);
       setAuth(true);
-      setData(overview);
-      writeCachedOverview(overview);
+      writeCache(payload);
     } catch (err) {
       if (err.status === 401) {
         setAuth(false);
         setData(null);
-        clearCachedOverview();
-        return;
+      } else {
+        setError(err.message || "Could not load your WaniKani snapshot");
+        if (data) setAuth(true);
       }
-      setLoadError(err.message || "Failed to load overview");
     }
   }
 
+  useEffect(() => { load(); }, []);
   useEffect(() => {
-    loadOverview();
+    const handler = () => setView(viewFromPath(window.location.pathname));
+    window.addEventListener("popstate", handler);
+    return () => window.removeEventListener("popstate", handler);
   }, []);
 
-  useEffect(() => {
-    function onKey(event) {
-      if (event.key === "Escape") setSheet(null);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  useEffect(() => {
-    function onPopState() {
-      setView(viewFromPath(window.location.pathname));
-    }
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, []);
-
-  const syncNote = useMemo(() => {
-    if (!data?.last_sync?.finished_at) return null;
-    return `Last sync ${formatDate(data.last_sync.finished_at)}`;
-  }, [data]);
-
-  if (auth === null) {
-    return <div className="empty" style={{ padding: "3rem", textAlign: "center" }}>Loading…</div>;
+  function navigate(next, params = null) {
+    const path = next === "session" ? "/session" : (NAV.find((item) => item.id === next)?.path || "/");
+    const query = params ? `?${new URLSearchParams(params)}` : "";
+    window.history.pushState({}, "", `${path}${query}`);
+    setView(next);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  if (!auth) {
-    return <Login onReady={() => { setAuth(true); loadOverview(); }} />;
-  }
+  const syncNote = useMemo(() => formatSync(data?.last_sync?.finished_at), [data]);
+  if (auth === null && !data) return <div className="loading-screen">Opening Kani Sensei…</div>;
+  if (!auth) return <Login onReady={load} />;
 
   return (
     <div className={`app-shell ${focus ? "is-focus" : ""}`}>
       <header className="topbar">
-        <button type="button" className="brand-mark brand-btn" onClick={() => navigate("home")}>
-          <strong>Kani Sensei</strong>
-          <span>{syncNote || "WaniKani re-entry"}</span>
-        </button>
-        <nav className="nav" aria-label="Primary" hidden={focus}>
-          {VIEWS.map((item) => (
-            <button
-              key={item.id}
-              className={(item.id === "practice" ? STUDY_VIEWS.has(view) : view === item.id) ? "active" : ""}
-              onClick={() => navigate(item.id)}
-            >
-              <NavLabel id={item.id} label={item.label} />
-            </button>
-          ))}
-          <button
-            className="ghost-btn"
-            onClick={async () => {
-              await api.logout();
-              setAuth(false);
-              setData(null);
-              clearCachedOverview();
-            }}
-          >
-            Sign out
-          </button>
-        </nav>
+        <button className="brand-mark" onClick={() => navigate("today")}><strong>Kani Sensei</strong><span>{syncNote}</span></button>
+        {!focus ? <nav className="nav" aria-label="Primary navigation">
+          {NAV.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => navigate(item.id)}>{item.label}</button>)}
+          <button className="sign-out" onClick={async () => { await api.logout(); setAuth(false); }}>Sign out</button>
+        </nav> : null}
       </header>
-
-      {loadError ? <div className="error" style={{ marginBottom: "1rem" }}>{loadError}</div> : null}
-
-      {view === "home" ? <Home data={data} onNavigate={navigate} onInspect={openInspect} /> : null}
-      {view === "glossary" ? <GlossaryView /> : null}
-      {view === "practice" ? <PracticeHub data={data} onNavigate={navigate} /> : null}
-      {view === "decay" ? <DecayView data={data} onNavigate={navigate} onInspect={openInspect} /> : null}
-      {view === "runway" ? <RunwayView data={data} onNavigate={navigate} /> : null}
-      {view === "quiz" ? (
-        <QuizView
-          data={data}
-          defaultCategory="vocab"
-          title="Warm-Up Quiz"
-          blurb={
-            <>
-              Multiple-choice drills weighted toward <T k="decay">Decay Map</T> pressure
-              — pick <T k="vocabulary">Vocab</T>, <T k="radical">Radicals</T>, or{" "}
-              <T k="kanji">Kanji</T> and get comfortable before the real{" "}
-              <T k="queue">queue</T>.
-            </>
-          }
-        />
-      ) : null}
-      {view === "kanji" ? (
-        <TestView
-          key="kanji-test"
-          data={data}
-          defaultObjectTypes={["kanji"]}
-          defaultKind="recall"
-          title="Kanji Test"
-          blurb={
-            <>
-              Type the <T k="meaning">meaning</T> or <T k="reading">reading</T> — the
-              same motion as a <T k="wanikani">WaniKani</T> <T k="review">review</T>.
-              Switch to <T k="reverse">reverse</T> or multiple choice if you want a
-              softer landing.
-            </>
-          }
-          finishNote="Kanji test complete. Carry that clarity into reviews."
-          onHome={() => navigate("home")}
-          onFocus={setFocus}
-        />
-      ) : null}
-      {view === "vocab" ? (
-        <TestView
-          key="vocab-test"
-          data={data}
-          defaultObjectTypes={["vocabulary"]}
-          defaultKind="recall"
-          title="Vocab Test"
-          blurb={
-            <>
-              Typed <T k="vocabulary">vocab</T> drills, <T k="decay">decay-weighted</T> so
-              the soft compounds show up first. <T k="reverse">Reverse</T> mode checks
-              whether you still recognize the word on sight.
-            </>
-          }
-          finishNote="Vocab test complete. The compounds should feel less slippery."
-          onHome={() => navigate("home")}
-          onFocus={setFocus}
-        />
-      ) : null}
-      {view === "ghosts" ? (
-        <TestView
-          key="ghosts"
-          data={data}
-          defaultObjectTypes={["kanji", "vocabulary"]}
-          defaultKind="recall"
-          defaultPool="burned"
-          title="Ghost Reviews"
-          blurb={
-            <>
-              <T k="burned">Burned</T> items never come back on{" "}
-              <T k="wanikani">WaniKani</T>. This is the only place they still have to
-              earn their keep.
-            </>
-          }
-          finishNote="Ghosts laid to rest. For now."
-          onHome={() => navigate("home")}
-          onFocus={setFocus}
-        />
-      ) : null}
-      {view === "leeches" ? (
-        <TestView
-          key="leeches"
-          data={data}
-          defaultObjectTypes={["kanji", "vocabulary"]}
-          defaultKind="recall"
-          defaultPool="leeches"
-          title="Leech Clinic"
-          blurb={
-            <>
-              Items with a long history of wrong answers. Sit with them here so they
-              stop draining the real <T k="review">review</T> <T k="queue">queue</T>.
-            </>
-          }
-          finishNote="Leeches trimmed. Go cash that in on WaniKani."
-          onHome={() => navigate("home")}
-          onFocus={setFocus}
-        />
-      ) : null}
-      {view === "dojo" ? (
-        <TestView
-          key="dojo"
-          data={data}
-          defaultObjectTypes={["kanji", "vocabulary"]}
-          defaultKind="recall"
-          defaultPool="decay"
-          defaultCount={12}
-          autoStart
-          title="Daily Dojo"
-          blurb={
-            <>
-              Twelve typed questions from whatever <T k="decay">Decay Map</T> says is
-              rotting. No setup — just start.
-            </>
-          }
-          finishNote="Dojo closed. The pile is a little less loud."
-          onHome={() => navigate("home")}
-          onFocus={setFocus}
-        />
-      ) : null}
-      {view === "drill" ? (
-        <TestView
-          key={`drill-${window.location.search}`}
-          data={data}
-          defaultObjectTypes={["kanji", "vocabulary"]}
-          defaultKind="recall"
-          title="Targeted drill"
-          blurb={
-            <>
-              A <T k="decay">decay-weighted</T> round pointed at one hotspot — usually
-              a <T k="level">level</T> you clicked on the map.
-            </>
-          }
-          finishNote="Hotspot cooled. Back to the map whenever you want."
-          onHome={() => navigate("home")}
-          onFocus={setFocus}
-        />
-      ) : null}
-
-      {sheet ? (
-        <div className="sheet-backdrop" onClick={() => setSheet(null)} role="presentation">
-          <div className="sheet surface" onClick={(event) => event.stopPropagation()} role="dialog" aria-label="Subject inspect">
-            <div className="sheet-top">
-              <div className="chars small">{sheet.characters}</div>
-              <button type="button" className="ghost-btn" onClick={() => setSheet(null)}>Close</button>
-            </div>
-            <p className="note">{sheet.meaning}</p>
-            <InspectCard card={sheet} onOpenRelated={openInspect} />
-          </div>
-        </div>
-      ) : null}
+      {error ? <div className="error global-error">{error}</div> : null}
+      {view === "today" ? <Today data={data} navigate={navigate} /> : null}
+      {view === "practice" ? <Practice data={data} navigate={navigate} /> : null}
+      {view === "progress" ? <Progress data={data} navigate={navigate} /> : null}
+      {view === "session" ? <TestView key={window.location.search} data={data} title="Practice session" blurb="One focused round. Finish clean, then decide whether to continue." onHome={() => navigate("today")} onFocus={setFocus} /> : null}
+      {!focus ? <footer><span>Kani Sensei</span><span>Recovery practice for WaniKani</span></footer> : null}
     </div>
   );
 }
