@@ -178,6 +178,13 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(plan["burn_status"], "stalled")
         self.assertIsNone(plan["projected_days_to_healthy"])
         self.assertIsNone(plan["projected_recovery_date"])
+        self.assertEqual(plan["queue_label"], "Needs a lighter load")
+
+    def test_backlog_above_floor_never_rounds_to_healthy(self):
+        rows = [row(i, stage=4) for i in range(60)]
+        plan = build_runway_plan(rows, daily_reviews=300, now=NOW)
+        self.assertEqual(plan["burn_status"], "recovering")
+        self.assertEqual(plan["projected_days_to_healthy"], 1)
 
     def test_include_new_lessons_pushes_recommendation_up(self):
         rows = [row(i, stage=4) for i in range(20)]

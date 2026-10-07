@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from api.overview import data_status
+from api.overview import build_prescription, data_status
 from api.sync import last_good_sync
 from api.tick import build_nudge, cached_snapshot
 
@@ -63,6 +63,21 @@ class OfflineModeTests(unittest.TestCase):
     def test_cached_nudge_discloses_its_source(self):
         message = build_nudge(self.now, 42, 88, "?", 17, source="cached")
         self.assertIn("Using last synced data", message)
+
+    def test_prescription_explains_levels_and_content_mix(self):
+        decay = {
+            "summary": {"suggested_levels": [18, 16, 17], "high_risk": 1, "medium_risk": 2},
+            "items": [
+                {"level": 18, "type": "kanji", "regressed": True},
+                {"level": 17, "type": "vocabulary", "regressed": False},
+                {"level": 16, "type": "vocabulary", "regressed": False},
+            ],
+        }
+        result = build_prescription(decay)
+        self.assertEqual((result["min_level"], result["max_level"]), (16, 18))
+        self.assertEqual(result["count"], 10)
+        self.assertEqual(result["type_counts"], {"kanji": 1, "vocabulary": 2})
+        self.assertEqual(result["attention_count"], 3)
 
 
 if __name__ == "__main__":

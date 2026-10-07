@@ -22,6 +22,33 @@ from shared.runway import fetch_runway_plan
 OVERVIEW_TTL = 45
 
 
+def build_prescription(decay):
+    """Turn decay output into one transparent, actionable session brief."""
+    summary = decay.get("summary") or {}
+    levels = summary.get("suggested_levels") or []
+    minimum = min(levels) if levels else 1
+    maximum = max(levels) if levels else minimum
+    attention = int(summary.get("high_risk") or 0) + int(summary.get("medium_risk") or 0)
+    count = min(20, max(10, attention or 12))
+    candidates = [
+        item for item in (decay.get("items") or [])
+        if not levels or item.get("level") in levels
+    ][:count]
+    type_counts = {
+        "kanji": sum(item.get("type") == "kanji" for item in candidates),
+        "vocabulary": sum(item.get("type") == "vocabulary" for item in candidates),
+    }
+    return {
+        "count": count,
+        "min_level": minimum,
+        "max_level": maximum,
+        "minutes": max(4, int((count * 0.55) + 0.999)),
+        "attention_count": attention,
+        "regressed_count": sum(bool(item.get("regressed")) for item in candidates),
+        "type_counts": type_counts,
+    }
+
+
 def data_status(last_sync, token_configured, now=None):
     """Describe whether the UI is backed by fresh or ageing last-good data."""
     finished_at = (last_sync or {}).get("finished_at")
@@ -98,6 +125,7 @@ def build_overview(db, min_level, max_level, limit, daily_reviews, include_new_l
             practice = None
     return {
         "decay": decay,
+        "prescription": build_prescription(decay),
         "runway": runway,
         "last_sync": last_sync,
         "practice": practice,

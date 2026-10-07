@@ -79,11 +79,14 @@ function Login({ onReady }) {
 
 function Today({ data, navigate }) {
   const summary = data?.decay?.summary || {};
-  const levels = summary.suggested_levels || [];
-  const count = Math.min(20, Math.max(10, Number(summary.high_risk || 0) + Number(summary.medium_risk || 0) || 12));
-  const min = levels.length ? Math.min(...levels) : 1;
-  const max = levels.length ? Math.max(...levels) : Math.max(1, min);
-  const minutes = Math.max(4, Math.ceil(count * 0.55));
+  const prescription = data?.prescription || {};
+  const count = prescription.count || 10;
+  const min = prescription.min_level || 1;
+  const max = prescription.max_level || min;
+  const minutes = prescription.minutes || Math.max(4, Math.ceil(count * 0.55));
+  const kanji = prescription.type_counts?.kanji || 0;
+  const vocabulary = prescription.type_counts?.vocabulary || 0;
+  const attention = prescription.attention_count ?? (Number(summary.high_risk || 0) + Number(summary.medium_risk || 0));
 
   return (
     <main className="today-view">
@@ -91,8 +94,13 @@ function Today({ data, navigate }) {
         <p className="kicker">Today’s prescription</p>
         <h1>{count} items worth fixing.</h1>
         <p className="lede">
-          Start with levels {min === max ? min : `${min}–${max}`}. The weakest kanji and vocabulary come first.
+          Start with levels {min === max ? min : `${min}–${max}`}. Sensei selected the weakest recall signals first.
         </p>
+        <div className="prescription-meta" aria-label="Session composition">
+          <span><strong>{kanji}</strong> Kanji</span>
+          <span><strong>{vocabulary}</strong> Vocabulary</span>
+          <span><strong>{attention}</strong> Flagged</span>
+        </div>
         <div className="action-row">
           <button className="primary-btn large" onClick={() => navigate("session", { min, max, count, types: "kanji,vocabulary", pool: "decay", go: 1 })}>
             Start today’s session
@@ -103,9 +111,9 @@ function Today({ data, navigate }) {
       </section>
 
       <section className="status-strip" aria-label="Current recovery status">
-        <div><span>Due in 24h</span><strong>{data?.runway?.current_backlog ?? "—"}</strong></div>
-        <div><span>Needs attention</span><strong>{Number(summary.high_risk || 0) + Number(summary.medium_risk || 0)}</strong></div>
-        <div><span>Recovery</span><strong>{(data?.runway?.burn_status || "steady").replaceAll("_", " ")}</strong></div>
+        <div><span>Recommended</span><strong>{count} items</strong></div>
+        <div><span>Needs attention</span><strong>{attention}</strong></div>
+        <div><span>Focus levels</span><strong>{min === max ? min : `${min}–${max}`}</strong></div>
       </section>
 
       <section className="next-step">
@@ -120,8 +128,15 @@ function Today({ data, navigate }) {
   );
 }
 
-function readFocus() {
-  const fallback = { levelMode: "single", min: 1, max: 1, type: "kanji", count: 10 };
+function readFocus(suggested = []) {
+  const hasSuggestion = suggested.length > 0;
+  const fallback = {
+    levelMode: hasSuggestion ? "range" : "single",
+    min: hasSuggestion ? Math.min(...suggested) : 1,
+    max: hasSuggestion ? Math.max(...suggested) : 1,
+    type: hasSuggestion ? "mixed" : "kanji",
+    count: 10,
+  };
   try {
     return { ...fallback, ...JSON.parse(localStorage.getItem(FOCUS_KEY)) };
   } catch {
@@ -130,8 +145,10 @@ function readFocus() {
 }
 
 function Practice({ data, navigate }) {
-  const [focus, setFocus] = useState(readFocus);
   const suggested = data?.decay?.summary?.suggested_levels || [];
+  const [focus, setFocus] = useState(() => readFocus(suggested));
+  const suggestedMin = suggested.length ? Math.min(...suggested) : null;
+  const suggestedMax = suggested.length ? Math.max(...suggested) : null;
 
   function update(key, value) {
     setFocus((current) => ({ ...current, [key]: value }));
@@ -170,7 +187,7 @@ function Practice({ data, navigate }) {
               <label><span>{focus.levelMode === "single" ? "Level" : "From"}</span><input type="number" min="1" max="60" value={focus.min} onChange={(event) => update("min", event.target.value)} /></label>
               {focus.levelMode === "range" ? <label><span>To</span><input type="number" min="1" max="60" value={focus.max} onChange={(event) => update("max", event.target.value)} /></label> : null}
             </div>
-            {suggested.length ? <button className="suggestion" onClick={() => setFocus((current) => ({ ...current, levelMode: "range", min: Math.min(...suggested), max: Math.max(...suggested) }))}>Use suggested levels {suggested.join(" · ")}</button> : null}
+            {suggested.length ? <button className="suggestion" onClick={() => setFocus((current) => ({ ...current, levelMode: "range", min: suggestedMin, max: suggestedMax }))}>Reset to Sensei’s levels {suggestedMin === suggestedMax ? suggestedMin : `${suggestedMin}–${suggestedMax}`}</button> : null}
           </div>
         </div>
 
@@ -213,9 +230,9 @@ function Practice({ data, navigate }) {
 }
 
 function Progress({ data, navigate }) {
-  const summary = data?.decay?.summary || {};
   const practice = data?.practice || {};
   const levels = data?.decay?.levels || [];
+  const hasSessions = Number(practice.week_sessions || 0) > 0;
   return (
     <main className="progress-view">
       <header className="page-intro">
@@ -224,18 +241,19 @@ function Progress({ data, navigate }) {
         <p>Enough signal to choose the next session. Nothing pretending to be a science project.</p>
       </header>
       <section className="progress-summary">
-        <div><span>This week</span><strong>{practice.week_accuracy != null ? `${practice.week_accuracy}%` : "—"}</strong><small>{practice.week_sessions || 0} Sensei sessions</small></div>
-        <div><span>Due now</span><strong>{summary.due ?? "—"}</strong><small>across synced items</small></div>
-        <div><span>Recovered</span><strong>{practice.combo_best || 0}</strong><small>best recent combo</small></div>
+        <div><span>This week</span><strong>{practice.week_accuracy != null ? `${practice.week_accuracy}%` : "—"}</strong><small>{hasSessions ? `${practice.week_sessions} Sensei sessions` : "No sessions yet"}</small></div>
+        <div><span>Sessions</span><strong>{practice.week_sessions || 0}</strong><small>completed in the last 7 days</small></div>
+        <div><span>Best combo</span><strong>{practice.combo_best || 0}</strong><small>{hasSessions ? "correct answers in a row" : "Start once to set a baseline"}</small></div>
       </section>
+      {!hasSessions ? <div className="empty-nudge"><span>Your progress starts with one clean session.</span><button className="text-btn" onClick={() => navigate("today")}>Start today’s prescription</button></div> : null}
       <section className="level-pressure">
         <div className="section-title"><div><p className="kicker">Level pressure</p><h2>Where memory is softest</h2></div><button className="text-btn" onClick={() => navigate("practice")}>Choose a focus</button></div>
         <div className="pressure-list">
           {levels.slice(0, 8).map((level) => (
             <button key={level.level} onClick={() => navigate("session", { min: level.level, max: level.level, count: 10, types: "kanji,vocabulary", pool: "decay", go: 1 })}>
-              <span>Level {level.level}</span>
-              <span className="pressure-track"><i style={{ width: `${Math.min(100, level.risk || 0)}%` }} /></span>
-              <strong>{level.risk || 0}</strong>
+              <span className="pressure-level">Level {level.level}</span>
+              <span className="pressure-detail"><span className="pressure-track"><i style={{ width: `${Math.min(100, level.risk || 0)}%` }} /></span><small>Pressure {level.risk || 0} / 100{Number(level.high || 0) + Number(level.medium || 0) > 0 ? ` · ${Number(level.high || 0) + Number(level.medium || 0)} flagged` : ""}</small></span>
+              <strong>Start →</strong>
             </button>
           ))}
         </div>
@@ -300,7 +318,7 @@ export default function App() {
       </header>
       {dataMode === "cached" || dataMode === "stale" ? (
         <div className={`data-notice ${dataMode}`} role="status">
-          {dataMode === "stale" ? "WaniKani connection is unavailable. Practice still works, but this snapshot is over 72 hours old." : "WaniKani connection is unavailable. Using your last synced data; practice remains fully available."}
+          <strong>{dataMode === "stale" ? "Cached snapshot" : "Cached data"}</strong><span>{syncNote}. Practice works; new WaniKani progress is paused.</span>
         </div>
       ) : null}
       {error ? <div className="error global-error">{error}</div> : null}

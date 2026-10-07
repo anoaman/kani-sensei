@@ -18,6 +18,7 @@ The output is structured: a single `plan` block + a `confidence` band + an
 """
 
 from datetime import datetime, timedelta, timezone
+from math import ceil
 
 
 # Approximate SRS review intervals (hours) for stages 1-5 (Apprentice + Guru 1).
@@ -216,9 +217,15 @@ def build_runway_plan(rows, daily_reviews=100, include_new_lessons=False, now=No
         surplus = recommended_daily - daily_load - int(round(new_lesson_cost))
         target_backlog = HEALTHY_QUEUE_FLOOR
         excess = max(0, current_backlog - target_backlog)
-        projected_days = max(0, int(round(excess / surplus))) if surplus > 0 else 0
+        projected_days = max(1, ceil(excess / surplus)) if excess > 0 and surplus > 0 else 0
         projected_date = (now + timedelta(days=projected_days)).date().isoformat()
         burn_status = "recovering" if projected_days > 0 else "already_healthy"
+
+    queue_label = {
+        "stalled": "Needs a lighter load",
+        "recovering": "Recovery in progress",
+        "already_healthy": "Manageable",
+    }[burn_status]
 
     # 6. Confidence + warnings.
     accuracy_rows = sum(
@@ -237,6 +244,7 @@ def build_runway_plan(rows, daily_reviews=100, include_new_lessons=False, now=No
         "projected_days_to_healthy": projected_days,
         "projected_recovery_date": projected_date,
         "burn_status": burn_status,
+        "queue_label": queue_label,
         "apprentice_breakdown": breakdown,
         "include_new_lessons": bool(include_new_lessons),
         "confidence": confidence,
