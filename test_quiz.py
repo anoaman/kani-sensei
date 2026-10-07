@@ -217,15 +217,5 @@ class QuizTests(unittest.TestCase):
         self.assertNotIn("lateral", QUIZ_POOL_QUERY_LEGACY.lower())
 
 
-class AuthTests(unittest.TestCase):
-    def test_token_roundtrip(self):
-        os.environ["CRON_SECRET"] = "test-secret-value"
-        from shared.auth import issue_token, verify_token
-        token, expires = issue_token(now=1_700_000_000)
-        self.assertTrue(verify_token(token, now=1_700_000_000))
-        self.assertFalse(verify_token(token, now=expires + 1))
-        self.assertFalse(verify_token("kibz|1|nope", now=1_700_000_000))
-
-
 if __name__ == "__main__":
     unittest.main()

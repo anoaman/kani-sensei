@@ -43,40 +43,6 @@ function formatSync(value) {
   return `Synced ${new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 }
 
-function Login({ onReady }) {
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function submit(event) {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      await api.login(password);
-      onReady();
-    } catch (err) {
-      setError(err.message || "Login failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <main className="login-shell">
-      <form className="login-card surface" onSubmit={submit}>
-        <p className="kicker">WaniKani recovery companion</p>
-        <h1>Kani Sensei</h1>
-        <p>Come back without fighting the whole pile at once.</p>
-        <label className="sr-only" htmlFor="site-password">Site password</label>
-        <input id="site-password" type="password" autoFocus autoComplete="current-password" placeholder="Site password" value={password} onChange={(event) => setPassword(event.target.value)} />
-        {error ? <div className="error">{error}</div> : null}
-        <button className="primary-btn" disabled={busy || !password}>{busy ? "Opening…" : "Enter"}</button>
-      </form>
-    </main>
-  );
-}
-
 function Today({ data, navigate }) {
   const summary = data?.decay?.summary || {};
   const prescription = data?.prescription || {};
@@ -263,7 +229,6 @@ function Progress({ data, navigate }) {
 }
 
 export default function App() {
-  const [auth, setAuth] = useState(null);
   const [data, setData] = useState(readCache);
   const [view, setView] = useState(() => viewFromPath(window.location.pathname));
   const [focus, setFocus] = useState(false);
@@ -274,16 +239,9 @@ export default function App() {
     try {
       const payload = await api.overview({ limit: 40 });
       setData(payload);
-      setAuth(true);
       writeCache(payload);
     } catch (err) {
-      if (err.status === 401) {
-        setAuth(false);
-        setData(null);
-      } else {
-        setError(err.message || "Could not load your WaniKani snapshot");
-        if (data) setAuth(true);
-      }
+      setError(err.message || "Could not load your WaniKani snapshot");
     }
   }
 
@@ -304,8 +262,13 @@ export default function App() {
 
   const syncNote = useMemo(() => formatSync(data?.last_sync?.finished_at), [data]);
   const dataMode = data?.data_status?.mode;
-  if (auth === null && !data) return <div className="loading-screen">Opening Kani Sensei…</div>;
-  if (!auth) return <Login onReady={load} />;
+  if (!data) {
+    return (
+      <div className="loading-screen">
+        {error ? <div><div className="error">{error}</div><button className="primary-btn" onClick={load}>Try again</button></div> : "Opening Kani Sensei…"}
+      </div>
+    );
+  }
 
   return (
     <div className={`app-shell ${focus ? "is-focus" : ""}`}>
@@ -313,7 +276,6 @@ export default function App() {
         <button className="brand-mark" onClick={() => navigate("today")}><strong>Kani Sensei</strong><span>{syncNote}</span></button>
         {!focus ? <nav className="nav" aria-label="Primary navigation">
           {NAV.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => navigate(item.id)}>{item.label}</button>)}
-          <button className="sign-out" onClick={async () => { await api.logout(); setAuth(false); }}>Sign out</button>
         </nav> : null}
       </header>
       {dataMode === "cached" || dataMode === "stale" ? (

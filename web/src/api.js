@@ -23,10 +23,6 @@ async function request(path, options = {}) {
 }
 
 export const api = {
-  me: () => request("/api/me"),
-  login: (password) =>
-    request("/api/login", { method: "POST", body: JSON.stringify({ password }) }),
-  logout: () => request("/api/logout", { method: "POST", body: "{}" }),
   overview: (params = {}) => {
     const qs = new URLSearchParams(params).toString();
     return request(`/api/overview${qs ? `?${qs}` : ""}`);

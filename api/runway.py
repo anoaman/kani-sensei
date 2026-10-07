@@ -13,7 +13,7 @@ import os
 import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from shared.auth import is_authorized, query_params
+from shared.auth import query_params
 from shared.http_util import optional_bool, optional_int, respond
 from shared.neon import NeonClient
 from shared.runway import fetch_runway_plan
@@ -29,10 +29,6 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if not is_authorized(self.headers):
-            respond(self, 401, {"error": "unauthorized"})
-            return
-
         query = query_params(self.path)
         try:
             daily_reviews = optional_int(query, "daily_reviews", default=100)

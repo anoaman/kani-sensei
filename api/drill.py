@@ -13,7 +13,7 @@ import os
 import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from shared.auth import is_authorized, query_params, read_json_body
+from shared.auth import query_params, read_json_body
 from shared.cache import clear as clear_cache
 from shared.drill import (
     fetch_practice_overview,
@@ -35,9 +35,6 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if not is_authorized(self.headers):
-            respond(self, 401, {"error": "unauthorized"})
-            return
         query = query_params(self.path)
         action = (query.get("action", [None])[0] or "").lower()
         try:
@@ -58,9 +55,6 @@ class handler(BaseHTTPRequestHandler):
             respond(self, 502, {"error": "drill_failed"})
 
     def do_POST(self):
-        if not is_authorized(self.headers):
-            respond(self, 401, {"error": "unauthorized"})
-            return
         query = query_params(self.path)
         action = (query.get("action", [None])[0] or "").lower()
         try:

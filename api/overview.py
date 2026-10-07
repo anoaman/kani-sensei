@@ -10,7 +10,7 @@ import os
 import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from shared.auth import is_authorized, query_params
+from shared.auth import query_params
 from shared import cache
 from shared.decay_map import fetch_decay_map
 from shared.http_util import optional_bool, optional_int, respond
@@ -146,9 +146,6 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if not is_authorized(self.headers):
-            respond(self, 401, {"error": "unauthorized"})
-            return
         query = query_params(self.path)
         try:
             min_level = optional_int(query, "min_level")
