@@ -1,5 +1,8 @@
 {
   "version": 2,
+  "regions": [
+    "sin1"
+  ],
   "functions": {
     "api/*.py": {
       "includeFiles": "shared/**",
@@ -7,6 +10,9 @@
     }
   },
   "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ]
 }
