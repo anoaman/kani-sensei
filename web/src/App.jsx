@@ -12,7 +12,7 @@ const NAV = [
 
 function readCache() {
   try {
-    return JSON.parse(sessionStorage.getItem(OVERVIEW_CACHE_KEY)) || null;
+    return JSON.parse(localStorage.getItem(OVERVIEW_CACHE_KEY)) || null;
   } catch {
     return null;
   }
@@ -20,7 +20,7 @@ function readCache() {
 
 function writeCache(value) {
   try {
-    sessionStorage.setItem(OVERVIEW_CACHE_KEY, JSON.stringify(value));
+    localStorage.setItem(OVERVIEW_CACHE_KEY, JSON.stringify(value));
   } catch {
     /* private mode */
   }
