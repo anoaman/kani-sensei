@@ -56,6 +56,18 @@ Site password for the UI: `SITE_PASSWORD` if set, otherwise `CRON_SECRET`.
 | `MINER_ENABLED` | `false` — flip to `true` when v1.1 miner is ready |
 | `ANTHROPIC_API_KEY` | Unset for v1 — only needed for miner |
 
+## Operation without a WaniKani token
+
+The web app reads from the last successful Neon snapshot, not directly from
+WaniKani. If `WANIKANI_API_KEY` is missing, expired, or rejected, Today,
+Practice, Progress, saved sessions, and answer history continue to work. The UI
+labels cached data and warns once it is more than 72 hours old.
+
+Daily sync preserves the last-good snapshot instead of replacing it. Scheduled
+nudges and Telegram `/status` also fall back to that snapshot. No new WaniKani
+progress can appear until a valid token is restored; a brand-new installation
+still needs one successful sync before personalized practice is available.
+
 ## cron-job.org setup
 
 1. Go to [cron-job.org](https://cron-job.org) → Create cronjob

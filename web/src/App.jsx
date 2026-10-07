@@ -285,6 +285,7 @@ export default function App() {
   }
 
   const syncNote = useMemo(() => formatSync(data?.last_sync?.finished_at), [data]);
+  const dataMode = data?.data_status?.mode;
   if (auth === null && !data) return <div className="loading-screen">Opening Kani Sensei…</div>;
   if (!auth) return <Login onReady={load} />;
 
@@ -297,6 +298,11 @@ export default function App() {
           <button className="sign-out" onClick={async () => { await api.logout(); setAuth(false); }}>Sign out</button>
         </nav> : null}
       </header>
+      {dataMode === "cached" || dataMode === "stale" ? (
+        <div className={`data-notice ${dataMode}`} role="status">
+          {dataMode === "stale" ? "WaniKani connection is unavailable. Practice still works, but this snapshot is over 72 hours old." : "WaniKani connection is unavailable. Using your last synced data; practice remains fully available."}
+        </div>
+      ) : null}
       {error ? <div className="error global-error">{error}</div> : null}
       {view === "today" ? <Today data={data} navigate={navigate} /> : null}
       {view === "practice" ? <Practice data={data} navigate={navigate} /> : null}

@@ -5,6 +5,7 @@ Optional: min_level, max_level, limit, daily_reviews, include_new_lessons
 """
 
 from http.server import BaseHTTPRequestHandler
+from datetime import datetime, timezone
 import os
 import sys
 
@@ -19,6 +20,40 @@ from shared.runway import fetch_runway_plan
 
 
 OVERVIEW_TTL = 45
+
+
+def data_status(last_sync, token_configured, now=None):
+    """Describe whether the UI is backed by fresh or ageing last-good data."""
+    finished_at = (last_sync or {}).get("finished_at")
+    age_hours = None
+    if finished_at:
+        try:
+            stamped = finished_at
+            if isinstance(stamped, str):
+                stamped = datetime.fromisoformat(stamped.replace("Z", "+00:00"))
+            if stamped.tzinfo is None:
+                stamped = stamped.replace(tzinfo=timezone.utc)
+            age_hours = max(
+                0,
+                ((now or datetime.now(timezone.utc)) - stamped).total_seconds() / 3600,
+            )
+        except (TypeError, ValueError):
+            age_hours = None
+
+    if not finished_at:
+        mode = "unavailable"
+    elif age_hours is not None and age_hours > 72:
+        mode = "stale"
+    elif not token_configured:
+        mode = "cached"
+    else:
+        mode = "live"
+    return {
+        "mode": mode,
+        "last_synced_at": finished_at,
+        "age_hours": round(age_hours, 1) if age_hours is not None else None,
+        "token_configured": bool(token_configured),
+    }
 
 
 def _cache_key(min_level, max_level, limit, daily_reviews, include_new_lessons):
@@ -66,6 +101,10 @@ def build_overview(db, min_level, max_level, limit, daily_reviews, include_new_l
         "runway": runway,
         "last_sync": last_sync,
         "practice": practice,
+        "data_status": data_status(
+            last_sync,
+            bool(os.environ.get("WANIKANI_API_KEY")),
+        ),
     }
 
 

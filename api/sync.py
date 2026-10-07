@@ -178,13 +178,29 @@ def run_sync(wk_token, db):
         raise
 
 
+def last_good_sync(db):
+    rows = db.execute(
+        """
+        select finished_at, counts
+        from sync_runs
+        where status = 'ok'
+        order by id desc
+        limit 1
+        """,
+        fetch=True,
+    )
+    if not rows:
+        return None
+    return {"finished_at": rows[0][0], "counts": rows[0][1]}
+
+
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         wk_token = os.environ.get("WANIKANI_API_KEY")
         database_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
         cron_secret = os.environ.get("CRON_SECRET")
 
-        if not all([wk_token, database_url, cron_secret]):
+        if not all([database_url, cron_secret]):
             print("[kani-sensei/sync] ERROR: missing required env vars", file=sys.stderr)
             self._respond(500, {"error": "missing_env_vars"})
             return
@@ -193,12 +209,32 @@ class handler(BaseHTTPRequestHandler):
             self._respond(401, {"error": "unauthorized"})
             return
 
+        db = NeonClient(database_url)
+        if not wk_token:
+            try:
+                last_sync = last_good_sync(db)
+            except Exception:
+                last_sync = None
+            self._respond(200, {
+                "status": "cached",
+                "reason": "wanikani_token_unavailable",
+                "last_sync": last_sync,
+            })
+            return
+
         try:
-            db = NeonClient(database_url)
             counts = run_sync(wk_token, db)
         except Exception as e:
             print(f"[kani-sensei/sync] sync failed: {e}", file=sys.stderr)
-            self._respond(502, {"error": "sync_failed", "detail": str(e)})
+            try:
+                last_sync = last_good_sync(db)
+            except Exception:
+                last_sync = None
+            self._respond(200, {
+                "status": "cached",
+                "reason": "wanikani_sync_failed",
+                "last_sync": last_sync,
+            })
             return
 
         self._respond(200, {"status": "ok", "counts": counts})

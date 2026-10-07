@@ -137,6 +137,8 @@ p { line-height: 1.6; }
 .item-btn { cursor: pointer; }
 .error { color: #7a2f21; background: #f2ddd7; border: 1px solid #d8a496; padding: 12px 14px; margin-top: 14px; }
 .global-error { margin-top: 18px; }
+.data-notice { margin-top: 18px; padding: 11px 14px; border: 1px solid #d8c9a5; border-radius: 10px; background: #fff9e9; color: #66552f; font-size: 13px; line-height: 1.45; }
+.data-notice.stale { border-color: #dfb7ad; background: #fff4f1; color: #77463d; }
 .shake { animation: shake .35s ease; }
 @keyframes shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
 
