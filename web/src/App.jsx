@@ -4,11 +4,6 @@ import TestView from "./TestView.jsx";
 
 const OVERVIEW_CACHE_KEY = "kani-overview-v2";
 const FOCUS_KEY = "kani-focus-v1";
-const NAV = [
-  { id: "today", label: "Today", path: "/" },
-  { id: "practice", label: "Practice", path: "/practice" },
-  { id: "progress", label: "Progress", path: "/progress" },
-];
 
 function readCache() {
   try {
@@ -26,16 +21,15 @@ function writeCache(value) {
   }
 }
 
+const MAX_LEVEL = 60;
+
 function viewFromPath(pathname) {
   if (pathname.startsWith("/session") || pathname.startsWith("/drill")) return "session";
-  if (pathname.startsWith("/progress") || pathname.startsWith("/decay") || pathname.startsWith("/runway")) return "progress";
-  if (
-    pathname.startsWith("/practice") || pathname.startsWith("/kanji") ||
-    pathname.startsWith("/vocab") || pathname.startsWith("/ghosts") ||
-    pathname.startsWith("/leeches") || pathname.startsWith("/dojo") ||
-    pathname.startsWith("/warmup") || pathname.startsWith("/glossary")
-  ) return "practice";
-  return "today";
+  return "dojo";
+}
+
+function wantsCustomize(pathname) {
+  return ["/practice", "/kanji", "/vocab", "/ghosts", "/leeches", "/warmup", "/glossary"].some((prefix) => pathname.startsWith(prefix));
 }
 
 function formatSync(value) {
@@ -43,52 +37,162 @@ function formatSync(value) {
   return `Synced ${new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 }
 
-function Today({ data, navigate }) {
-  const summary = data?.decay?.summary || {};
+function formatDay(value) {
+  if (!value) return null;
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function levelRange(min, max) {
+  return min === max ? `Level ${min}` : `Levels ${min}–${max}`;
+}
+
+function typeLabel(type) {
+  return { kanji: "Kanji", vocabulary: "Vocabulary", radical: "Radical", kana_vocabulary: "Vocabulary" }[type] || type;
+}
+
+function sessionFromPrescription(data) {
   const prescription = data?.prescription || {};
   const count = prescription.count || 10;
   const min = prescription.min_level || 1;
   const max = prescription.max_level || min;
-  const minutes = prescription.minutes || Math.max(4, Math.ceil(count * 0.55));
+  return { count, min, max, minutes: prescription.minutes || Math.max(4, Math.ceil(count * 0.55)) };
+}
+
+function HeatStrip({ levels, focusMin, focusMax, onPick }) {
+  const byLevel = new Map(levels.map((level) => [level.level, level]));
+  const peak = Math.max(20, ...levels.map((level) => Number(level.risk || 0)));
+  const cells = [];
+  for (let n = 1; n <= MAX_LEVEL; n += 1) {
+    const level = byLevel.get(n);
+    if (!level) {
+      cells.push(<span key={n} className="heat-cell off" aria-hidden="true" />);
+      continue;
+    }
+    const heat = Math.min(1, Number(level.risk || 0) / peak);
+    const focus = n >= focusMin && n <= focusMax;
+    const flagged = Number(level.high || 0) + Number(level.medium || 0);
+    cells.push(
+      <button
+        key={n}
+        className={`heat-cell${focus ? " focus" : ""}${heat > 0.6 ? " hot" : ""}`}
+        style={{ "--heat": (0.08 + 0.92 * heat).toFixed(2) }}
+        title={`Level ${n} · ${level.accuracy ?? "—"}% accuracy · ${level.due || 0} due${flagged ? ` · ${flagged} flagged` : ""}`}
+        aria-label={`Drill level ${n}`}
+        onClick={() => onPick(n)}
+      >
+        <b>{n}</b>
+      </button>
+    );
+  }
+  return <div className="heat-strip">{cells}</div>;
+}
+
+function Dojo({ data, navigate, onCustomize }) {
+  const { count, min, max, minutes } = sessionFromPrescription(data);
+  const prescription = data?.prescription || {};
+  const items = data?.decay?.items || [];
+  const levels = data?.decay?.levels || [];
+  const suggested = data?.decay?.summary?.suggested_levels || [];
+  const queue = items.filter((item) => !suggested.length || suggested.includes(item.level)).slice(0, count);
+  const hero = queue[0] || items[0];
   const kanji = prescription.type_counts?.kanji || 0;
   const vocabulary = prescription.type_counts?.vocabulary || 0;
-  const attention = prescription.attention_count ?? (Number(summary.high_risk || 0) + Number(summary.medium_risk || 0));
+  const runway = data?.runway || {};
+  const practice = data?.practice || {};
+  const notebook = practice.notebook || [];
+  const backlog = Number(runway.current_backlog ?? 0);
+  const floor = Number(runway.healthy_floor || 0);
+  const recovery = formatDay(runway.projected_recovery_date);
+  const start = () => navigate("session", { min, max, count, types: "kanji,vocabulary", pool: "decay", go: 1 });
+
+  useEffect(() => {
+    function onKey(event) {
+      if (event.key !== "Enter" || event.metaKey || event.ctrlKey || event.altKey) return;
+      const tag = event.target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON" || tag === "A") return;
+      event.preventDefault();
+      start();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   return (
-    <main className="today-view">
-      <section className="prescription">
-        <p className="kicker">Today’s prescription</p>
-        <h1>{count} items worth fixing.</h1>
-        <p className="lede">
-          Start with levels {min === max ? min : `${min}–${max}`}. Sensei selected the weakest recall signals first.
-        </p>
-        <div className="prescription-meta" aria-label="Session composition">
-          <span><strong>{kanji}</strong> Kanji</span>
-          <span><strong>{vocabulary}</strong> Vocabulary</span>
-          <span><strong>{attention}</strong> Flagged</span>
+    <main className="dojo">
+      <section className="dojo-stage">
+        <div className="dojo-hero">
+          <p className="kicker">{hero ? "Softest item right now" : "Nothing slipping"}</p>
+          <div className="hero-glyph" lang="ja">{hero?.characters || "休"}</div>
+          {hero ? (
+            <p className="hero-hint">
+              <span className="tag">Level {hero.level} · {typeLabel(hero.type)}</span>
+              <span>{hero.accuracy}% accuracy over {hero.attempts} reviews<span className="wide-only"> · meaning hidden until you answer</span></span>
+            </p>
+          ) : <p className="hero-hint"><span>Every level is holding. A short warm-up still keeps it that way.</span></p>}
+          <h1>{count} items worth fixing.</h1>
+          <p className="hero-sub">
+            {levelRange(min, max)} · {kanji} kanji, {vocabulary} vocabulary · about {minutes} minutes · typed recall
+          </p>
+          <div className="hero-actions">
+            <button className="go-btn" onClick={start}>Start session <kbd>Enter</kbd></button>
+            <a className="quiet-link" href="https://www.wanikani.com/subjects/review" target="_blank" rel="noreferrer">Then open WaniKani ↗</a>
+          </div>
+          {queue.length ? (
+            <div className="queue-row" aria-label="Session items">
+              {queue.map((item, index) => (
+                <span key={item.subject_id} className={index === 0 ? "queue-tile now" : "queue-tile"} lang="ja" title={`Level ${item.level} · ${typeLabel(item.type)}`}>{item.characters}</span>
+              ))}
+            </div>
+          ) : null}
         </div>
-        <div className="action-row">
-          <button className="primary-btn large" onClick={() => navigate("session", { min, max, count, types: "kanji,vocabulary", pool: "decay", go: 1 })}>
-            Start today’s session
-          </button>
-          <button className="text-btn" onClick={() => navigate("practice")}>Choose focus</button>
-        </div>
-        <p className="session-note">About {minutes} minutes · meaning + reading · typed recall</p>
+
+        <aside className="dojo-side">
+          <div className="side-stat">
+            <p className="kicker">Review queue</p>
+            <strong>{backlog}<small>/ {floor || "—"} healthy</small></strong>
+            {floor ? <span className="side-bar"><i style={{ width: `${Math.min(100, (floor / Math.max(backlog, 1)) * 100)}%` }} /></span> : null}
+            <p>{runway.queue_label || "Queue snapshot"}{recovery ? ` · back to healthy ${recovery}` : ""}</p>
+          </div>
+          <div className="side-stat">
+            <p className="kicker">This week</p>
+            <strong>{practice.week_sessions || 0}<small>{Number(practice.week_sessions) === 1 ? "session" : "sessions"}</small></strong>
+            <p>
+              {practice.week_accuracy != null ? `${practice.week_accuracy}% accuracy · ` : ""}
+              Best combo {practice.combo_best || 0}
+            </p>
+          </div>
+          <div className="side-stat">
+            <p className="kicker">Missed lately</p>
+            {notebook.length ? (
+              <>
+                <div className="missed-row">{notebook.slice(0, 6).map((item) => <span key={item.subject_id} lang="ja" title={item.meaning}>{item.characters}</span>)}</div>
+                <p>Goes into the next session automatically</p>
+              </>
+            ) : <p>No misses logged yet.</p>}
+          </div>
+          <button className="quiet-link side-customize" onClick={onCustomize}>Customize a session →</button>
+        </aside>
       </section>
 
-      <section className="status-strip" aria-label="Current recovery status">
-        <div><span>Recommended</span><strong>{count} items</strong></div>
-        <div><span>Needs attention</span><strong>{attention}</strong></div>
-        <div><span>Focus levels</span><strong>{min === max ? min : `${min}–${max}`}</strong></div>
-      </section>
-
-      <section className="next-step">
-        <div>
-          <p className="kicker">After this session</p>
-          <h2>Take the warm-up into WaniKani.</h2>
-          <p>Kani Sensei finds the soft spots. WaniKani remains the source of truth for your reviews.</p>
+      <section className="dojo-heat">
+        <div className="heat-head">
+          <p className="kicker">Levels 1–60 · decay heat</p>
+          <span>Tap a level to drill it · outlined = today’s focus</span>
         </div>
-        <a className="secondary-btn" href="https://www.wanikani.com/subjects/review" target="_blank" rel="noreferrer">Open WaniKani</a>
+        <HeatStrip
+          levels={levels}
+          focusMin={min}
+          focusMax={max}
+          onPick={(level) => navigate("session", { min: level, max: level, count: 10, types: "kanji,vocabulary", pool: "decay", go: 1 })}
+        />
+        <div className="heat-legend">
+          <span><i style={{ "--heat": 0.12 }} />Holding</span>
+          <span><i style={{ "--heat": 0.55 }} />Slipping</span>
+          <span><i style={{ "--heat": 0.95 }} />Needs you</span>
+          <span><i className="off" />Not reached</span>
+        </div>
       </section>
     </main>
   );
@@ -110,7 +214,7 @@ function readFocus(suggested = []) {
   }
 }
 
-function Practice({ data, navigate }) {
+function Customize({ data, navigate, onClose }) {
   const suggested = data?.decay?.summary?.suggested_levels || [];
   const [focus, setFocus] = useState(() => readFocus(suggested));
   const suggestedMin = suggested.length ? Math.min(...suggested) : null;
@@ -129,102 +233,60 @@ function Practice({ data, navigate }) {
     if (next.max < next.min) next.max = next.min;
     localStorage.setItem(FOCUS_KEY, JSON.stringify(next));
     const types = next.type === "mixed" ? "radical,kanji,vocabulary" : next.type;
+    onClose();
     navigate("session", { min: next.min, max: next.max, count: next.count, types, pool: "decay", go: 1 });
   }
 
   return (
-    <main className="practice-view">
-      <header className="page-intro">
-        <p className="kicker">Practice</p>
-        <h1>Choose what to work on.</h1>
-        <p>Sensei recommends the daily session. This is where you take control.</p>
-      </header>
+    <div className="drawer-scrim" onClick={onClose}>
+      <aside className="drawer" role="dialog" aria-modal="true" aria-label="Customize a session" onClick={(event) => event.stopPropagation()}>
+        <div className="drawer-head">
+          <div><p className="kicker">Customize</p><h2>Pick your own round.</h2></div>
+          <button className="drawer-close" onClick={onClose} aria-label="Close">Esc</button>
+        </div>
 
-      <section className="focus-builder">
-        <div className="builder-section">
-          <span className="step-number">01</span>
-          <div>
-            <h2>Level</h2>
-            <div className="segmented">
-              <button className={focus.levelMode === "single" ? "active" : ""} onClick={() => update("levelMode", "single")}>Single level</button>
-              <button className={focus.levelMode === "range" ? "active" : ""} onClick={() => update("levelMode", "range")}>Level range</button>
-            </div>
-            <div className="level-fields">
-              <label><span>{focus.levelMode === "single" ? "Level" : "From"}</span><input type="number" min="1" max="60" value={focus.min} onChange={(event) => update("min", event.target.value)} /></label>
-              {focus.levelMode === "range" ? <label><span>To</span><input type="number" min="1" max="60" value={focus.max} onChange={(event) => update("max", event.target.value)} /></label> : null}
-            </div>
-            {suggested.length ? <button className="suggestion" onClick={() => setFocus((current) => ({ ...current, levelMode: "range", min: suggestedMin, max: suggestedMax }))}>Reset to Sensei’s levels {suggestedMin === suggestedMax ? suggestedMin : `${suggestedMin}–${suggestedMax}`}</button> : null}
+        <div className="drawer-section">
+          <h3>Level</h3>
+          <div className="segmented">
+            <button className={focus.levelMode === "single" ? "active" : ""} onClick={() => update("levelMode", "single")}>Single level</button>
+            <button className={focus.levelMode === "range" ? "active" : ""} onClick={() => update("levelMode", "range")}>Level range</button>
+          </div>
+          <div className="level-fields">
+            <label><span>{focus.levelMode === "single" ? "Level" : "From"}</span><input type="number" min="1" max="60" value={focus.min} onChange={(event) => update("min", event.target.value)} /></label>
+            {focus.levelMode === "range" ? <label><span>To</span><input type="number" min="1" max="60" value={focus.max} onChange={(event) => update("max", event.target.value)} /></label> : null}
+          </div>
+          {suggested.length ? <button className="suggestion" onClick={() => setFocus((current) => ({ ...current, levelMode: "range", min: suggestedMin, max: suggestedMax }))}>Reset to Sensei’s levels {suggestedMin === suggestedMax ? suggestedMin : `${suggestedMin}–${suggestedMax}`}</button> : null}
+        </div>
+
+        <div className="drawer-section">
+          <h3>Content</h3>
+          <div className="option-grid">
+            {[
+              ["kanji", "Kanji", "Characters and readings"],
+              ["vocabulary", "Vocabulary", "Words and compounds"],
+              ["radical", "Radicals", "Visual building blocks"],
+              ["mixed", "Mixed", "Everything together"],
+            ].map(([id, label, note]) => (
+              <button key={id} className={focus.type === id ? "select-tile active" : "select-tile"} onClick={() => update("type", id)}>
+                <strong>{label}</strong><span>{note}</span>
+              </button>
+            ))}
           </div>
         </div>
 
-        <div className="builder-section">
-          <span className="step-number">02</span>
-          <div>
-            <h2>Content</h2>
-            <div className="option-grid">
-              {[
-                ["kanji", "Kanji", "Characters and readings"],
-                ["vocabulary", "Vocabulary", "Words and compounds"],
-                ["radical", "Radicals", "Visual building blocks"],
-                ["mixed", "Mixed", "Everything together"],
-              ].map(([id, label, note]) => (
-                <button key={id} className={focus.type === id ? "select-tile active" : "select-tile"} onClick={() => update("type", id)}>
-                  <strong>{label}</strong><span>{note}</span>
-                </button>
-              ))}
-            </div>
+        <div className="drawer-section">
+          <h3>Session size</h3>
+          <div className="count-row">
+            {[10, 20, 30, 40].map((value) => <button key={value} className={Number(focus.count) === value ? "active" : ""} onClick={() => update("count", value)}>{value}</button>)}
           </div>
         </div>
 
-        <div className="builder-section">
-          <span className="step-number">03</span>
-          <div>
-            <h2>Session size</h2>
-            <div className="count-row">
-              {[10, 20, 30, 40].map((value) => <button key={value} className={Number(focus.count) === value ? "active" : ""} onClick={() => update("count", value)}>{value}</button>)}
-            </div>
-          </div>
+        <div className="drawer-foot">
+          <p><strong>{focus.levelMode === "single" ? `Level ${focus.min}` : `Levels ${focus.min}–${focus.max}`}</strong> · {focus.type === "mixed" ? "mixed content" : focus.type} · {focus.count} questions</p>
+          <button className="go-btn wide" onClick={start}>Start this session</button>
         </div>
-
-        <div className="builder-footer">
-          <p><strong>{focus.levelMode === "single" ? `Level ${focus.min}` : `Levels ${focus.min}–${focus.max}`}</strong> · {focus.type === "mixed" ? "Mixed content" : focus.type} · {focus.count} questions</p>
-          <button className="primary-btn large" onClick={start}>Start focused session</button>
-        </div>
-      </section>
-    </main>
-  );
-}
-
-function Progress({ data, navigate }) {
-  const practice = data?.practice || {};
-  const levels = data?.decay?.levels || [];
-  const hasSessions = Number(practice.week_sessions || 0) > 0;
-  return (
-    <main className="progress-view">
-      <header className="page-intro">
-        <p className="kicker">Progress</p>
-        <h1>Your recovery, without the spreadsheet.</h1>
-        <p>Enough signal to choose the next session. Nothing pretending to be a science project.</p>
-      </header>
-      <section className="progress-summary">
-        <div><span>This week</span><strong>{practice.week_accuracy != null ? `${practice.week_accuracy}%` : "—"}</strong><small>{hasSessions ? `${practice.week_sessions} Sensei sessions` : "No sessions yet"}</small></div>
-        <div><span>Sessions</span><strong>{practice.week_sessions || 0}</strong><small>completed in the last 7 days</small></div>
-        <div><span>Best combo</span><strong>{practice.combo_best || 0}</strong><small>{hasSessions ? "correct answers in a row" : "Start once to set a baseline"}</small></div>
-      </section>
-      {!hasSessions ? <div className="empty-nudge"><span>Your progress starts with one clean session.</span><button className="text-btn" onClick={() => navigate("today")}>Start today’s prescription</button></div> : null}
-      <section className="level-pressure">
-        <div className="section-title"><div><p className="kicker">Level pressure</p><h2>Where memory is softest</h2></div><button className="text-btn" onClick={() => navigate("practice")}>Choose a focus</button></div>
-        <div className="pressure-list">
-          {levels.slice(0, 8).map((level) => (
-            <button key={level.level} onClick={() => navigate("session", { min: level.level, max: level.level, count: 10, types: "kanji,vocabulary", pool: "decay", go: 1 })}>
-              <span className="pressure-level">Level {level.level}</span>
-              <span className="pressure-detail"><span className="pressure-track"><i style={{ width: `${Math.min(100, level.risk || 0)}%` }} /></span><small>Pressure {level.risk || 0} / 100{Number(level.high || 0) + Number(level.medium || 0) > 0 ? ` · ${Number(level.high || 0) + Number(level.medium || 0)} flagged` : ""}</small></span>
-              <strong>Start →</strong>
-            </button>
-          ))}
-        </div>
-      </section>
-    </main>
+      </aside>
+    </div>
   );
 }
 
@@ -232,6 +294,7 @@ export default function App() {
   const [data, setData] = useState(readCache);
   const [view, setView] = useState(() => viewFromPath(window.location.pathname));
   const [focus, setFocus] = useState(false);
+  const [customize, setCustomize] = useState(() => wantsCustomize(window.location.pathname));
   const [error, setError] = useState("");
 
   async function load() {
@@ -251,9 +314,21 @@ export default function App() {
     window.addEventListener("popstate", handler);
     return () => window.removeEventListener("popstate", handler);
   }, []);
+  useEffect(() => {
+    function onKey(event) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setCustomize((open) => !open);
+      } else if (event.key === "Escape") {
+        setCustomize(false);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   function navigate(next, params = null) {
-    const path = next === "session" ? "/session" : (NAV.find((item) => item.id === next)?.path || "/");
+    const path = next === "session" ? "/session" : "/";
     const query = params ? `?${new URLSearchParams(params)}` : "";
     window.history.pushState({}, "", `${path}${query}`);
     setView(next);
@@ -270,13 +345,20 @@ export default function App() {
     );
   }
 
+  const backlog = data?.runway?.current_backlog;
+  const recovery = formatDay(data?.runway?.projected_recovery_date);
+
   return (
     <div className={`app-shell ${focus ? "is-focus" : ""}`}>
       <header className="topbar">
-        <button className="brand-mark" onClick={() => navigate("today")}><strong>Kani Sensei</strong><span>{syncNote}</span></button>
-        {!focus ? <nav className="nav" aria-label="Primary navigation">
-          {NAV.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => navigate(item.id)}>{item.label}</button>)}
-        </nav> : null}
+        <button className="brand-mark" onClick={() => navigate("dojo")}><span className="seal" lang="ja">先</span><strong>Kani Sensei</strong></button>
+        {!focus ? (
+          <div className="topbar-meta">
+            <span className={`sync-dot ${dataMode || ""}`}>{syncNote}</span>
+            {backlog != null ? <span className="wide-only">Queue {backlog}{recovery ? ` → healthy ${recovery}` : ""}</span> : null}
+            <button className="pill-btn" onClick={() => setCustomize(true)}>Customize <kbd className="wide-only">⌘K</kbd></button>
+          </div>
+        ) : null}
       </header>
       {dataMode === "cached" || dataMode === "stale" ? (
         <div className={`data-notice ${dataMode}`} role="status">
@@ -284,11 +366,9 @@ export default function App() {
         </div>
       ) : null}
       {error ? <div className="error global-error">{error}</div> : null}
-      {view === "today" ? <Today data={data} navigate={navigate} /> : null}
-      {view === "practice" ? <Practice data={data} navigate={navigate} /> : null}
-      {view === "progress" ? <Progress data={data} navigate={navigate} /> : null}
-      {view === "session" ? <TestView key={window.location.search} data={data} title="Practice session" blurb="One focused round. Finish clean, then decide whether to continue." onHome={() => navigate("today")} onFocus={setFocus} /> : null}
-      {!focus ? <footer><span>Kani Sensei</span><span>Recovery practice for WaniKani</span></footer> : null}
+      {view === "dojo" ? <Dojo data={data} navigate={navigate} onCustomize={() => setCustomize(true)} /> : null}
+      {view === "session" ? <TestView key={window.location.search} data={data} title="Practice session" blurb="One focused round. Finish clean, then decide whether to continue." onHome={() => navigate("dojo")} onFocus={setFocus} /> : null}
+      {customize && !focus ? <Customize data={data} navigate={navigate} onClose={() => setCustomize(false)} /> : null}
     </div>
   );
 }
