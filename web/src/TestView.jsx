@@ -164,6 +164,7 @@ export default function TestView({
   const [combo, setCombo] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(null);
   const [shake, setShake] = useState(false);
+  const [hint, setHint] = useState("");
   const [wrapUp, setWrapUp] = useState(false);
   const [scoreboard, setScoreboard] = useState({ correct: 0, total: 0 });
   const composing = useRef(false);
@@ -176,7 +177,7 @@ export default function TestView({
   const finished = Boolean(feedback?.score?.finished) || (secondsLeft === 0 && session);
   const isTyped = (session?.kind || kind) === "recall" || (session?.kind || kind) === "speed";
   const progressTotal = session?.question_count || count;
-  const progressNow = feedback?.score?.total ?? (session ? index : 0);
+  const progressNow = feedback?.score?.answered ?? feedback?.score?.total ?? (session ? index : 0);
   const timeUp = session?.kind === "speed" && secondsLeft === 0;
   const showRecap = Boolean(session && (wrapUp || timeUp));
   const inSession = Boolean(session && !showRecap);
@@ -201,6 +202,7 @@ export default function TestView({
     setMisses([]);
     setCombo(0);
     setTyped("");
+    setHint("");
     setWrapUp(false);
     setScoreboard({ correct: 0, total: 0 });
     setSession(null);
@@ -250,7 +252,31 @@ export default function TestView({
     }
   }, [isTyped, session, feedback, index]);
 
+  function bump() {
+    setShake(true);
+    window.setTimeout(() => setShake(false), 420);
+  }
+
   function applyResult(result, current) {
+    setHint("");
+    if (result.requeued) {
+      // A miss comes back a few questions later; the round can't end until it's cleared.
+      const retry = {
+        ...result.requeued,
+        prompt_text: result.requeued.prompt_text || current.prompt_text,
+      };
+      setSession((prev) => {
+        if (!prev) return prev;
+        const questions = [...prev.questions];
+        const at = Math.min(questions.length, index + 1 + (retry.gap || 3));
+        questions.splice(at, 0, retry);
+        return {
+          ...prev,
+          questions,
+          question_count: result.score?.question_count ?? questions.length,
+        };
+      });
+    }
     setFeedback(result);
     setInspect(result.inspect || null);
     setCombo(result.combo || 0);
@@ -259,8 +285,8 @@ export default function TestView({
       total: result.score?.total || 0,
     });
     if (!result.correct) {
-      setShake(true);
-      window.setTimeout(() => setShake(false), 420);
+      bump();
+      if (result.retry_of) return;
       setMisses((list) => [
         ...list,
         {
@@ -304,6 +330,13 @@ export default function TestView({
         question_id: question.id,
         text: trimmed,
       });
+      if (result.retry) {
+        // Wrong half of the item (reading vs meaning): shake, don't count it.
+        setHint(result.hint || "Try the other half.");
+        bump();
+        inputRef.current?.select();
+        return;
+      }
       applyResult(result, question);
     } catch (err) {
       setError(err.message || "Could not grade answer");
@@ -341,12 +374,13 @@ export default function TestView({
     setFeedback(null);
     setInspect(null);
     setTyped("");
+    setHint("");
   }
 
   nextRef.current = next;
 
   useEffect(() => {
-    if (!autoAdvance || !feedback?.correct || feedback?.score?.finished) return undefined;
+    if (!autoAdvance || !feedback?.correct || feedback?.almost || feedback?.score?.finished) return undefined;
     const timer = window.setTimeout(() => nextRef.current(), 850);
     return () => window.clearTimeout(timer);
   }, [autoAdvance, feedback]);
@@ -538,6 +572,7 @@ export default function TestView({
             <>
               <div className="prompt">
                 <div className="eyebrow">
+                  {question.retry ? "back again · " : ""}
                   {question.prompt_type} · lv {question.level} · {question.object_type}
                   {question.band ? ` · ${question.band}` : ""}
                 </div>
@@ -571,7 +606,10 @@ export default function TestView({
                     autoCorrect="off"
                     spellCheck={false}
                     placeholder={question.prompt_type === "reading" ? "よみ / yomi" : "meaning"}
-                    onChange={(e) => setTyped(e.target.value)}
+                    onChange={(e) => {
+                      setTyped(e.target.value);
+                      if (hint) setHint("");
+                    }}
                     onKeyDown={onKeyDown}
                     onCompositionStart={() => {
                       composing.current = true;
@@ -586,6 +624,8 @@ export default function TestView({
                   </button>
                 </form>
               ) : null}
+
+              {hint && !feedback ? <p className="drill-hint">{hint}</p> : null}
 
               {!isTyped ? (
                 <div className={`choices ${question.prompt_type === "reverse" ? "glyph-choices" : ""}`}>
@@ -625,7 +665,9 @@ export default function TestView({
             <div className={`reveal ${feedback.correct ? "ok" : "nope"}`}>
               <strong>
                 {feedback.correct
-                  ? (combo >= 3 ? `Combo ${combo}.` : "Solid.")
+                  ? feedback.almost
+                    ? "Close enough. Watch the spelling."
+                    : (combo >= 3 ? `Combo ${combo}.` : "Solid.")
                   : feedback.almost
                     ? "Almost."
                     : feedback.gave_up
@@ -639,8 +681,11 @@ export default function TestView({
                 : feedback.reveal?.readings?.length
                   ? ` · ${feedback.reveal.readings.join(" / ")}`
                   : ""}
-              {!feedback.correct && feedback.submitted ? (
+              {(!feedback.correct || feedback.almost) && feedback.submitted ? (
                 <div className="meta">You said {feedback.submitted}</div>
+              ) : null}
+              {feedback.requeued ? (
+                <div className="meta">It comes back in a few. Clear it to finish the round.</div>
               ) : null}
               {inspect ? <InspectCard card={inspect} onOpenRelated={openRelated} /> : null}
               <div style={{ marginTop: "0.85rem" }}>

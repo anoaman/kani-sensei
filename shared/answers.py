@@ -2,7 +2,7 @@
 
 Meanings are case-insensitive and ignore punctuation / leading "to"/"the".
 Readings accept hiragana, katakana, or romaji. Close meaning typos are
-flagged as "almost" but still count wrong — WK is strict, so we stay honest.
+graded "almost"; drills pass them like WaniKani does and flag the spelling.
 """
 
 from __future__ import annotations

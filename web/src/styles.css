@@ -169,6 +169,7 @@ p { line-height: 1.6; }
 .item .glyph { font-family: var(--jp); font-size: 28px; }
 .item-btn { cursor: pointer; }
 .error { color: #7a2f21; background: #f2ddd7; border: 1px solid #d8a496; padding: 12px 14px; margin-top: 14px; }
+.drill-hint { color: #7a5a12; background: #f5ecd2; border: 1px solid #dcc58a; padding: 8px 12px; margin: 10px 0 0; font-size: 13px; }
 .global-error { margin-top: 18px; }
 .data-notice { width: fit-content; max-width: 100%; display: flex; gap: 8px; margin-top: 14px; padding: 7px 10px; border: 1px solid #d8c9a5; border-radius: 3px; background: #f7f1df; color: #66552f; font-size: 12px; line-height: 1.4; }
 .data-notice.stale { border-color: #dfb7ad; background: #f8ece8; color: #77463d; }

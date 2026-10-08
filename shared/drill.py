@@ -9,10 +9,16 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import uuid
 from datetime import datetime, timezone
 
-from shared.answers import grade_answer as check_typed
+from shared.answers import (
+    grade_answer as check_typed,
+    looks_like_kana,
+    normalize_meaning,
+    normalize_reading,
+)
 from shared.inspect import fetch_inspect
 from shared.quiz import (
     build_question,
@@ -563,6 +569,118 @@ def _sensei_verdict(correct, total):
     return "Rough round. Retry the misses before the real queue."
 
 
+# A missed item comes back this many questions later, at most this many times.
+REQUEUE_GAP = 3
+MAX_REQUEUES = 2
+_ALL_KANA_RE = re.compile(r"^[\u3040-\u30ffー]+$")
+
+
+def _subject_answers(db, subject_id):
+    rows = db.execute(
+        "select meanings, readings from wk_subjects where id = %s",
+        [subject_id],
+        fetch=True,
+    )
+    if not rows:
+        return [], []
+    meanings = [
+        entry.get("meaning") if isinstance(entry, dict) else entry
+        for entry in _parse_json(rows[0][0])
+    ]
+    readings = [
+        entry.get("reading") if isinstance(entry, dict) else entry
+        for entry in _parse_json(rows[0][1])
+    ]
+    return [m for m in meanings if m], [r for r in readings if r]
+
+
+def wrong_type_hint(db, subject_id, prompt_type, submitted):
+    """Return a shake hint when the answer is the other half of the item.
+
+    WaniKani doesn't fail you for typing the reading on a meaning prompt
+    (or vice versa); it shakes and lets you try again. So do we.
+    """
+    if prompt_type == "meaning" and looks_like_kana(submitted):
+        return "We want the meaning, in English."
+    if prompt_type == "reading" and not _ALL_KANA_RE.match(normalize_reading(submitted)):
+        return "We want the reading, in kana or romaji."
+    try:
+        meanings, readings = _subject_answers(db, subject_id)
+    except Exception:
+        return None
+    if prompt_type == "meaning":
+        got = normalize_reading(submitted)
+        if got and got in {normalize_reading(r) for r in readings}:
+            return "That's the reading. We want the meaning."
+    elif prompt_type == "reading":
+        got = normalize_meaning(submitted)
+        if got and got in {normalize_meaning(m) for m in meanings}:
+            return "That's the meaning. We want the reading."
+    return None
+
+
+def _requeue_miss(db, session_id, qid, meta, rng=None):
+    """Clone a missed question to the end of the session. Returns its id or None."""
+    counts = meta.setdefault("requeues", {})
+    origin = (meta.get("retry_of") or {}).get(str(qid), str(qid))
+    if counts.get(origin, 0) >= MAX_REQUEUES:
+        return None
+    rows = db.execute(
+        """
+        select subject_id, prompt_type, characters, object_type, level,
+               decay_score, correct_answer, accepted_answers, choices, correct_index,
+               (select coalesce(max(position), 0) from drill_questions
+                where session_id = %s::uuid)
+        from drill_questions where id = %s::uuid
+        """,
+        [session_id, qid],
+        fetch=True,
+    )
+    if not rows:
+        return None
+    (subject_id, prompt_type, characters, object_type, level, decay_score,
+     correct_answer, accepted_raw, choices_raw, correct_index, max_pos) = rows[0]
+    choices = _parse_json(choices_raw)
+    if choices and correct_index is not None:
+        answer = choices[int(correct_index)]
+        choices = list(choices)
+        (rng or random.Random()).shuffle(choices)
+        correct_index = choices.index(answer)
+    new_id = str(uuid.uuid4())
+    db.execute(
+        """
+        insert into drill_questions
+          (id, session_id, position, subject_id, prompt_type, characters,
+           object_type, level, decay_score, correct_answer, accepted_answers,
+           choices, correct_index)
+        values
+          (%s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb,
+           %s::jsonb, %s)
+        """,
+        [
+            new_id, session_id, int(max_pos) + 1, subject_id, prompt_type,
+            characters, object_type, level, decay_score, correct_answer,
+            json.dumps(_parse_json(accepted_raw), ensure_ascii=False),
+            json.dumps(choices, ensure_ascii=False), correct_index,
+        ],
+    )
+    counts[origin] = counts.get(origin, 0) + 1
+    meta.setdefault("retry_of", {})[new_id] = origin
+    return {
+        "id": new_id,
+        "prompt_type": prompt_type,
+        "characters": None if prompt_type == "reverse" else characters,
+        "object_type": object_type,
+        "level": level,
+        "decay_score": decay_score,
+        "band": None,
+        "choices": choices,
+        "prompt_text": None if prompt_type == "reverse" else characters,
+        "retry": True,
+        "gap": REQUEUE_GAP,
+    }
+
+
 def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_up=False):
     ensure_schema(db)
     rows = db.execute(
@@ -614,7 +732,12 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
         if not submitted:
             raise ValueError("text is required")
         result = check_typed(prompt_type, submitted, accepted)
-        is_correct = result == "correct"
+        if result != "correct":
+            hint = wrong_type_hint(db, subject_id, prompt_type, submitted)
+            if hint:
+                return {"question_id": question_id, "retry": True, "hint": hint}
+        # Small typos pass, as on WaniKani; the reveal still flags the spelling.
+        is_correct = result in ("correct", "almost")
         almost = result == "almost"
 
     if is_correct:
@@ -632,25 +755,36 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
         """,
         [chosen_index, submitted, is_correct, now, qid],
     )
-    new_correct = int(score_correct) + (1 if is_correct else 0)
-    new_total = int(score_total) + 1
-    finished = new_total >= int(question_count)
+    # Score is first-try accuracy; requeued retries only gate the finish.
+    is_retry = str(qid) in (meta.get("retry_of") or {})
+    new_correct = int(score_correct) + (1 if is_correct and not is_retry else 0)
+    new_total = int(score_total) + (0 if is_retry else 1)
+    answered = int(meta.get("answered", score_total) or 0) + 1
+    meta["answered"] = answered
+    requeued = None
+    if not is_correct and kind != "speed":
+        requeued = _requeue_miss(db, session_id, qid, meta)
+        if requeued:
+            question_count = int(question_count) + 1
+    finished = answered >= int(question_count)
     db.execute(
         """
         update drill_sessions
         set score_correct = %s, score_total = %s, combo_best = %s, meta = %s::jsonb,
+            question_count = %s,
             finished_at = case when %s then %s else finished_at end
         where id = %s::uuid
         """,
         [
-            new_correct, new_total, combo_best, json.dumps(meta),
+            new_correct, new_total, combo_best, json.dumps(meta), question_count,
             finished, now if finished else None, session_id,
         ],
     )
-    try:
-        _record_miss(db, subject_id, is_correct, prompt_type, submitted)
-    except Exception:
-        pass
+    if not is_retry:
+        try:
+            _record_miss(db, subject_id, is_correct, prompt_type, submitted)
+        except Exception:
+            pass
 
     return {
         "question_id": question_id,
@@ -674,10 +808,14 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
             "answer": correct_answer,
             "subject_id": subject_id,
         },
+        "retry_of": (meta.get("retry_of") or {}).get(str(qid)),
+        "requeued": requeued,
         "score": {
             "correct": new_correct,
             "total": new_total,
-            "remaining": max(0, int(question_count) - new_total),
+            "answered": answered,
+            "question_count": int(question_count),
+            "remaining": max(0, int(question_count) - answered),
             "finished": finished,
         },
         "verdict": _sensei_verdict(new_correct, new_total) if finished else None,

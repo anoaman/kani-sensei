@@ -137,30 +137,77 @@ if __name__ == "__main__":
 
 
 class FakeDrillDb:
-    """Answers grade_drill's one select; swallows the writes."""
+    """Tiny in-memory stand-in for the queries grade_drill makes."""
 
-    def __init__(self, prompt_type, accepted, kind="recall"):
-        self.row = (
-            "q1", 42, prompt_type, "大", "kanji", 1, accepted[0],
-            accepted, [], None, None, None,
-            kind, 0, 0, 5, 0, {},
+    def __init__(self, prompt_type, accepted, kind="recall", count=5,
+                 meanings=("Big", "Large"), readings=("だい", "たい")):
+        self.session = {
+            "kind": kind, "score_correct": 0, "score_total": 0,
+            "question_count": count, "combo_best": 0, "meta": {},
+        }
+        self.questions = {}
+        self.subject = (
+            [{"meaning": m} for m in meanings],
+            [{"reading": r} for r in readings],
         )
-        self.writes = []
+        self.add_question("q1", 0, prompt_type, accepted)
+
+    def add_question(self, qid, position, prompt_type, accepted, choices=None,
+                     correct_index=None):
+        self.questions[qid] = {
+            "position": position, "subject_id": 42, "prompt_type": prompt_type,
+            "characters": "大", "object_type": "kanji", "level": 1,
+            "decay_score": 0, "correct_answer": accepted[0],
+            "accepted": list(accepted), "choices": choices or [],
+            "correct_index": correct_index, "answered": False,
+        }
 
     def has_relation(self, name):
         return True
 
     def execute(self, sql, params=None, fetch=False):
+        sess = self.session
+        if "from wk_subjects" in sql:
+            return [self.subject]
+        if "max(position)" in sql:
+            q = self.questions[params[1]]
+            top = max(item["position"] for item in self.questions.values())
+            return [(
+                q["subject_id"], q["prompt_type"], q["characters"],
+                q["object_type"], q["level"], q["decay_score"],
+                q["correct_answer"], q["accepted"], q["choices"],
+                q["correct_index"], top,
+            )]
         if fetch:
-            return [self.row]
-        self.writes.append((sql, params))
+            q = self.questions[params[0]]
+            answered = "x" if q["answered"] else None
+            return [(
+                params[0], q["subject_id"], q["prompt_type"], q["characters"],
+                q["object_type"], q["level"], q["correct_answer"], q["accepted"],
+                q["choices"], q["correct_index"], None, answered,
+                sess["kind"], sess["score_correct"], sess["score_total"],
+                sess["question_count"], sess["combo_best"], dict(sess["meta"]),
+            )]
+        if sql.strip().startswith("insert into drill_questions"):
+            (new_id, _sid, position, _subj, prompt_type, _chars, _ot, _lvl,
+             _decay, _correct, accepted, choices, correct_index) = params
+            import json
+            self.add_question(new_id, position, prompt_type, json.loads(accepted),
+                              json.loads(choices), correct_index)
+        elif "update drill_questions" in sql:
+            self.questions[params[-1]]["answered"] = True
+        elif "update drill_sessions" in sql:
+            import json
+            (sess["score_correct"], sess["score_total"], sess["combo_best"],
+             meta, sess["question_count"]) = params[:5]
+            sess["meta"] = json.loads(meta)
         return None
 
 
 class DrillGradeTests(unittest.TestCase):
-    def grade(self, prompt_type, accepted, text):
+    def grade(self, prompt_type, accepted, text, **kwargs):
         from shared.drill import grade_drill
-        db = FakeDrillDb(prompt_type, accepted)
+        db = FakeDrillDb(prompt_type, accepted, **kwargs)
         return grade_drill(db, "s1", "q1", text=text)
 
     def test_typed_meaning_correct(self):
@@ -175,3 +222,76 @@ class DrillGradeTests(unittest.TestCase):
     def test_typed_wrong_answer(self):
         result = self.grade("meaning", ["Big"], "small")
         self.assertFalse(result["correct"])
+
+    def test_small_typo_passes_but_is_flagged(self):
+        result = self.grade("meaning", ["Third Day"], "thrid day")
+        self.assertTrue(result["correct"])
+        self.assertTrue(result["almost"])
+
+    def test_kana_on_meaning_prompt_shakes(self):
+        result = self.grade("meaning", ["Big"], "だい")
+        self.assertTrue(result["retry"])
+        self.assertIn("meaning", result["hint"])
+
+    def test_romaji_reading_on_meaning_prompt_shakes(self):
+        result = self.grade("meaning", ["Big"], "dai")
+        self.assertTrue(result["retry"])
+        self.assertIn("reading", result["hint"])
+
+    def test_meaning_on_reading_prompt_shakes(self):
+        result = self.grade("reading", ["だい"], "big")
+        self.assertTrue(result["retry"])
+
+    def test_shake_leaves_question_open(self):
+        from shared.drill import grade_drill
+        db = FakeDrillDb("meaning", ["Big"])
+        grade_drill(db, "s1", "q1", text="だい")
+        self.assertFalse(db.questions["q1"]["answered"])
+        result = grade_drill(db, "s1", "q1", text="big")
+        self.assertTrue(result["correct"])
+
+
+class DrillRequeueTests(unittest.TestCase):
+    def test_miss_comes_back_and_gates_the_finish(self):
+        from shared.drill import grade_drill
+        db = FakeDrillDb("meaning", ["Big"], count=1)
+        miss = grade_drill(db, "s1", "q1", text="small")
+        self.assertFalse(miss["correct"])
+        retry = miss["requeued"]
+        self.assertTrue(retry)
+        self.assertFalse(miss["score"]["finished"])
+        self.assertEqual(miss["score"]["question_count"], 2)
+
+        hit = grade_drill(db, "s1", retry["id"], text="big")
+        self.assertTrue(hit["correct"])
+        self.assertTrue(hit["score"]["finished"])
+        # First-try accuracy: the retry doesn't rescue the score.
+        self.assertEqual((hit["score"]["correct"], hit["score"]["total"]), (0, 1))
+
+    def test_requeue_is_capped(self):
+        from shared.drill import MAX_REQUEUES, grade_drill
+        db = FakeDrillDb("meaning", ["Big"], count=1)
+        qid, result = "q1", None
+        for _ in range(MAX_REQUEUES + 1):
+            result = grade_drill(db, "s1", qid, gave_up=True)
+            if result["requeued"]:
+                qid = result["requeued"]["id"]
+        self.assertIsNone(result["requeued"])
+        self.assertTrue(result["score"]["finished"])
+
+    def test_speed_rounds_do_not_requeue(self):
+        from shared.drill import grade_drill
+        db = FakeDrillDb("meaning", ["Big"], kind="speed", count=1)
+        result = grade_drill(db, "s1", "q1", text="small")
+        self.assertIsNone(result["requeued"])
+        self.assertTrue(result["score"]["finished"])
+
+    def test_mc_requeue_reshuffles_but_keeps_answer(self):
+        from shared.drill import grade_drill
+        db = FakeDrillDb("meaning", ["Big"], kind="mc", count=1)
+        db.questions["q1"]["choices"] = ["Big", "Small", "Tree", "Fire"]
+        db.questions["q1"]["correct_index"] = 0
+        result = grade_drill(db, "s1", "q1", choice_index=2)
+        retry = result["requeued"]
+        new = db.questions[retry["id"]]
+        self.assertEqual(new["choices"][new["correct_index"]], "Big")
