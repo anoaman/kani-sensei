@@ -5,9 +5,9 @@ does not replay WaniKani's first-time ladder:
 
 - Check: restarting a level puts every item up for a placement check, no
   unlock gating. Both halves right first try -> straight to Guru. Any miss ->
-  Relearn at Apprentice 1, with the teaching card shown.
-- Relearn: Apprentice items are always available. A clean pass climbs one
-  stage, a miss drops one. The session spaces repeats, so a rotten item can
+  Relearn, with the teaching card shown.
+- Relearn: always available. Three clean passes, spaced through the
+  session, bring an item back to Guru; a miss costs one. The session spaces repeats, so a rotten item can
   get back to Guru in one sitting.
 - Reviews: Guru and up run on real time (1 week, 2 weeks, 1 month, 4
   months) with WaniKani's penalty. That's where retention is actually proven.
@@ -31,6 +31,10 @@ from shared.quiz import _accepted_meanings, _accepted_readings, _parse_json
 TYPE_ORDER = {"radical": 0, "kanji": 1, "vocabulary": 2, "kana_vocabulary": 2}
 GURU = 5
 BURNED = 9
+# Relearn lives on stages 2-4, so it takes exactly RELEARN_PASSES clean
+# answers to get back to Guru. Stage 1 is unused.
+RELEARN_FLOOR = 2
+RELEARN_PASSES = GURU - RELEARN_FLOOR
 BATCH = 10
 PASS_RATIO = 0.9
 MODES = ("check", "relearn", "reviews", "ahead")
@@ -112,16 +116,16 @@ def review_stage(stage, meaning_wrong, reading_wrong):
     if wrong == 0:
         return min(BURNED, stage + 1)
     penalty = 2 if stage >= GURU else 1
-    return max(1, stage - math.ceil(wrong / 2) * penalty)
+    return max(RELEARN_FLOOR, stage - math.ceil(wrong / 2) * penalty)
 
 
 def outcome(mode, stage, meaning_wrong, reading_wrong):
     """New stage after an item's halves are done in the given mode."""
     wrong = int(meaning_wrong) + int(reading_wrong)
     if mode == "check":
-        return GURU if wrong == 0 else 1
+        return GURU if wrong == 0 else RELEARN_FLOOR
     if mode == "relearn":
-        return stage + 1 if wrong == 0 else max(1, stage - 1)
+        return stage + 1 if wrong == 0 else max(RELEARN_FLOOR, stage - 1)
     if mode == "ahead":
         return stage if wrong == 0 else review_stage(stage, meaning_wrong, reading_wrong)
     return review_stage(stage, meaning_wrong, reading_wrong)
@@ -141,6 +145,17 @@ def mode_for(stage, available_at, now):
 
 def needs_reading(object_type, readings):
     return object_type in ("kanji", "vocabulary") and bool(readings)
+
+
+def stage_name(stage):
+    """Course labels: relearn shows clean passes as pips, Guru+ keeps WK names."""
+    stage = int(stage or 0)
+    if stage <= 0:
+        return "Unchecked"
+    if stage < GURU:
+        done = max(0, stage - RELEARN_FLOOR)
+        return "Relearn " + "●" * done + "○" * (RELEARN_PASSES - done)
+    return SRS_NAMES.get(stage, f"stage {stage}").title()
 
 
 def stage_bucket(stage):
@@ -217,7 +232,7 @@ def _shape_item(row, level):
         "lesson_position": raw.get("lesson_position") or 0,
         "in_course": bool(in_course),
         "stage": stage if in_course else None,
-        "stage_name": (SRS_NAMES.get(stage) if stage else "unchecked") if in_course else None,
+        "stage_name": stage_name(stage) if in_course else None,
         "bucket": stage_bucket(stage) if in_course else None,
         "available_at": _iso(available_at),
     }
@@ -450,11 +465,12 @@ def fetch_queue(db, level, mode, limit=BATCH):
             "characters": characters,
             "image_url": None if characters else image_url(raw),
             "stage": stage,
-            "stage_name": SRS_NAMES.get(stage) if stage else "unchecked",
+            "stage_name": stage_name(stage),
             "needs_reading": reading,
             "prompts": prompts or (["meaning", "reading"] if reading else ["meaning"]),
         }
-        if mode == "relearn" and stage == 1:
+        # Fresh off a miss (back on the floor): open with the teaching card.
+        if mode == "relearn" and stage == RELEARN_FLOOR:
             try:
                 item["card"] = fetch_inspect(db, sid)
                 # The card's SRS label is the old WaniKani snapshot; the course has its own.
@@ -567,7 +583,7 @@ def answer(db, subject_id, prompt_type, text=None, gave_up=False):
         "item_done": done,
         "previous_stage": stage,
         "stage": stage,
-        "stage_name": SRS_NAMES.get(stage) if stage else "unchecked",
+        "stage_name": stage_name(stage),
         "level_passed": False,
     }
 
@@ -609,7 +625,7 @@ def answer(db, subject_id, prompt_type, text=None, gave_up=False):
     )
     payload.update({
         "stage": new,
-        "stage_name": SRS_NAMES.get(new),
+        "stage_name": stage_name(new),
         "clean": (meaning_wrong + reading_wrong) == 0,
         "next_review_at": None if keep_clock else _iso(next_available(new, now)),
     })

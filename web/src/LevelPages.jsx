@@ -212,7 +212,9 @@ export function LevelPage({ level, go }) {
                         {item.reading ? <span className="tile-reading" lang="ja">{item.reading}</span> : null}
                         <span className="tile-meaning">{item.meaning}</span>
                       </span>
-                      {item.in_course ? <span className="tile-stage">{BUCKET_LABEL[item.bucket]}</span> : null}
+                      {item.in_course ? (
+                        <span className="tile-stage">{item.bucket === "relearn" ? item.stage_name : BUCKET_LABEL[item.bucket]}</span>
+                      ) : null}
                     </button>
                   ))}
                 </div>

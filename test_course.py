@@ -3,12 +3,14 @@ from datetime import datetime, timedelta, timezone
 
 from shared.course import (
     GURU,
+    RELEARN_FLOOR,
     level_summary,
     mode_for,
     next_available,
     outcome,
     review_stage,
     stage_bucket,
+    stage_name,
 )
 
 NOW = datetime(2026, 10, 8, 22, 47, tzinfo=timezone.utc)
@@ -19,13 +21,23 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual(outcome("check", 0, 0, 0), GURU)
 
     def test_check_any_miss_goes_to_relearn(self):
-        self.assertEqual(outcome("check", 0, 0, 1), 1)
+        self.assertEqual(outcome("check", 0, 0, 1), RELEARN_FLOOR)
 
-    def test_relearn_climbs_and_slips_one(self):
-        self.assertEqual(outcome("relearn", 3, 0, 0), 4)
-        self.assertEqual(outcome("relearn", 4, 0, 0), GURU)
-        self.assertEqual(outcome("relearn", 3, 2, 1), 2)
-        self.assertEqual(outcome("relearn", 1, 1, 0), 1)
+    def test_relearn_takes_three_clean_passes(self):
+        stage = outcome("check", 0, 1, 0)
+        for _ in range(3):
+            stage = outcome("relearn", stage, 0, 0)
+        self.assertEqual(stage, GURU)
+
+    def test_relearn_slips_one_but_not_below_floor(self):
+        self.assertEqual(outcome("relearn", 4, 2, 1), 3)
+        self.assertEqual(outcome("relearn", RELEARN_FLOOR, 1, 0), RELEARN_FLOOR)
+
+    def test_stage_names(self):
+        self.assertEqual(stage_name(0), "Unchecked")
+        self.assertEqual(stage_name(2), "Relearn ○○○")
+        self.assertEqual(stage_name(4), "Relearn ●●○")
+        self.assertEqual(stage_name(5), "Guru 1")
 
     def test_ahead_never_promotes_but_misses_count(self):
         self.assertEqual(outcome("ahead", 6, 0, 0), 6)
@@ -34,7 +46,7 @@ class OutcomeTests(unittest.TestCase):
     def test_review_uses_wanikani_penalty(self):
         self.assertEqual(review_stage(5, 0, 0), 6)
         self.assertEqual(review_stage(8, 2, 2), 4)
-        self.assertEqual(review_stage(2, 5, 5), 1)
+        self.assertEqual(review_stage(3, 5, 5), RELEARN_FLOOR)
 
 
 class ClockTests(unittest.TestCase):

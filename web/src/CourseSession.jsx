@@ -8,11 +8,11 @@ const TYPE_LABEL = { radical: "Radical", kanji: "Kanji", vocabulary: "Vocabulary
 const RETRY_GAP = 3;
 const RELEARN_GAP = 4;
 // Relearn walks an item up to Guru in one sitting, a few passes at most.
-const MAX_PASSES = 5;
+const MAX_PASSES = 4; // three clean passes reach Guru, plus one slip of slack
 
 export const MODE_INFO = {
   check: { title: "Check", verb: "Check", note: "One look per item. Clean answers go straight to Guru; misses go to Relearn." },
-  relearn: { title: "Relearn", verb: "Relearn", note: "No waiting. Clean passes climb a stage; items come back until they're on Guru." },
+  relearn: { title: "Relearn", verb: "Relearn", note: "No waiting. Three clean passes, spaced out, and an item is back on Guru." },
   reviews: { title: "Reviews", verb: "Review", note: "Due on real time. This is where it sticks or slips." },
   ahead: { title: "Study ahead", verb: "Study ahead", note: "Early practice. Right answers don't move items up; misses still count." },
 };
@@ -74,19 +74,21 @@ function LessonCard({ card, index, total }) {
           </div>
         ) : null}
       </div>
-      {card.components?.length ? (
-        <div className="lesson-parts">
-          <p className="kicker">Made of</p>
-          <div className="glyph-row">
-            {card.components.map((part) => (
-              <span key={part.subject_id} className={`glyph-chip t-${typeOf(part)}`}>
-                <span className="glyph" lang="ja">{part.characters || "・"}</span>
-                <span className="meta">{part.meaning}</span>
-              </span>
-            ))}
+      {[["Made of", card.components], ["Looks like", card.similar]].map(([label, parts]) => (
+        parts?.length ? (
+          <div className="lesson-parts" key={label}>
+            <p className="kicker">{label}</p>
+            <div className="glyph-row">
+              {parts.map((part) => (
+                <span key={part.subject_id} className={`glyph-chip t-${typeOf(part)}`}>
+                  <span className="glyph" lang="ja">{part.characters || "・"}</span>
+                  <span className="meta">{part.meaning}</span>
+                </span>
+              ))}
+            </div>
           </div>
-        </div>
-      ) : null}
+        ) : null
+      ))}
       <div className="lesson-mnemonics">
         {card.mnemonic?.meaning ? <><p className="kicker">Meaning mnemonic</p><Mnemonic text={card.mnemonic.meaning} /></> : null}
         {card.needs_reading && card.mnemonic?.reading ? <><p className="kicker">Reading mnemonic</p><Mnemonic text={card.mnemonic.reading} /></> : null}
@@ -353,7 +355,7 @@ export default function CourseSession({ level, mode, go, onFocus }) {
               {feedback.item_done && feedback.stage_name ? (
                 <div className={`stage-change ${feedback.stage < feedback.previous_stage || (mode === "check" && feedback.stage < 5) ? "down" : feedback.stage === feedback.previous_stage ? "" : "up"}`}>
                   {mode === "check" && feedback.stage < 5
-                    ? `→ Relearn (${feedback.stage_name})`
+                    ? `→ ${feedback.stage_name}`
                     : feedback.stage === feedback.previous_stage
                       ? `Held at ${feedback.stage_name}`
                       : `${feedback.stage < feedback.previous_stage ? "↓" : "↑"} ${feedback.stage_name}`}

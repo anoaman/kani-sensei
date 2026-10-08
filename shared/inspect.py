@@ -137,7 +137,7 @@ def build_inspect_card(
     related = {item["subject_id"]: item for item in (related or [])}
     component_ids = _ids(raw, "component_subject_ids")
     similar_ids = _ids(raw, "visually_similar_subject_ids")
-    used_ids = _ids(raw, "amalgamation_subject_ids")[:8]
+    used_ids = _ids(raw, "amalgamation_subject_ids")
     from shared.quiz import _accepted_meanings
 
     stage = int(srs_stage or 0)
@@ -202,7 +202,7 @@ def fetch_inspect(db, subject_id):
     ids = (
         _ids(parsed, "component_subject_ids")
         + _ids(parsed, "visually_similar_subject_ids")
-        + _ids(parsed, "amalgamation_subject_ids")[:8]
+        + _ids(parsed, "amalgamation_subject_ids")
     )
     related = _lookup_related(db, ids)
     return build_inspect_card(
