@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toKana } from "wanakana";
 import { api } from "./api.js";
+import KanjiField from "./KanjiField.jsx";
 
 const TYPE_NAME = { r: "Radical", k: "Kanji", v: "Vocabulary" };
 const STATE_ORDER = ["fresh", "unchecked", "relearn", "guru", "master", "burned"];
@@ -312,9 +313,17 @@ export default function Home({ go }) {
             <button className="quiet-link" onClick={() => go("/levels")}>Browse levels</button>
           </div>
         </div>
-        <WarmUp levels={levels} />
+        <KanjiField sky={sky} onOpenLevel={(level) => go(`/level/${level}`)} />
       </section>
       <Sky sky={sky} levels={levels} go={go} />
+      <section className="warmup-section">
+        <div className="warmup-copy">
+          <p className="kicker">Before you go</p>
+          <h2>One breath.</h2>
+          <p className="muted">Five quick items from your levels. No stakes: it doesn't touch your course, just tells you how warm you are.</p>
+        </div>
+        <WarmUp levels={levels} />
+      </section>
     </main>
   );
 }

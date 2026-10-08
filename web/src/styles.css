@@ -356,6 +356,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sky-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .sky-legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
 
+
+.kanji-field { position: relative; height: clamp(300px, 34vw, 420px); }
+.kanji-field canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: pan-y; }
+.field-caption { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 6px 14px 6px 8px; border: 1px solid var(--line); border-radius: 999px; background: rgba(242,237,226,.85); backdrop-filter: blur(4px); cursor: pointer; white-space: nowrap; animation: rise .5s ease; }
+.field-caption:hover { border-color: var(--ink); }
+.field-caption > span:first-child { font-family: var(--jp); font-size: 20px; font-weight: 700; color: var(--ver); }
+.field-caption > span:last-child { display: grid; text-align: left; line-height: 1.2; }
+.field-caption b { font-size: 13px; }
+.field-caption small { font-size: 11px; color: var(--ink-soft); }
+.warmup-section { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 460px); gap: 48px; align-items: center; margin-top: 46px; padding-top: 38px; border-top: 1px solid var(--line); }
+.warmup-copy h2 { margin: 6px 0 10px; font-family: var(--serif); font-size: clamp(28px, 4vw, 40px); }
+.warmup-copy .muted { max-width: 420px; margin: 0; line-height: 1.55; }
+
 @media (max-width: 860px) {
   .app-shell { width: min(100% - 32px, 1240px); }
   .wide-only { display: none; }
@@ -398,6 +411,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .home { padding-top: 20px; }
   .home-hero { grid-template-columns: 1fr; gap: 30px; padding-bottom: 30px; }
   .home-next .go-btn { width: 100%; }
+  .kanji-field { height: 280px; }
+  .warmup-section { grid-template-columns: 1fr; gap: 20px; }
   .sky { grid-template-columns: 1fr; gap: 6px; }
   .sky-col { grid-template-columns: 30px 1fr; justify-items: start; align-items: start; gap: 8px; }
   .sky-label { border-bottom: 0; border-right: 1px solid var(--line); text-align: left; padding: 0; }
