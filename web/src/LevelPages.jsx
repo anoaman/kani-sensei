@@ -41,7 +41,8 @@ function InspectDrawer({ subjectId, onClose }) {
   useEffect(() => {
     if (!current) return;
     setCard(null);
-    api.inspect(current).then(setCard).catch(() => setCard(null));
+    // Drop the old WaniKani SRS label; the tile already shows course state.
+    api.inspect(current).then((data) => setCard({ ...data, srs_name: null })).catch(() => setCard(null));
   }, [current]);
   useEffect(() => {
     const onKey = (event) => event.key === "Escape" && onClose();

@@ -351,10 +351,12 @@ export default function CourseSession({ level, mode, go, onFocus }) {
                 </div>
               ) : null}
               {feedback.item_done && feedback.stage_name ? (
-                <div className={`stage-change ${feedback.stage < feedback.previous_stage ? "down" : feedback.stage === feedback.previous_stage ? "" : "up"}`}>
-                  {feedback.stage === feedback.previous_stage
-                    ? `Held at ${feedback.stage_name}`
-                    : `${feedback.stage < feedback.previous_stage ? "↓" : "↑"} ${feedback.stage_name}`}
+                <div className={`stage-change ${feedback.stage < feedback.previous_stage || (mode === "check" && feedback.stage < 5) ? "down" : feedback.stage === feedback.previous_stage ? "" : "up"}`}>
+                  {mode === "check" && feedback.stage < 5
+                    ? `→ Relearn (${feedback.stage_name})`
+                    : feedback.stage === feedback.previous_stage
+                      ? `Held at ${feedback.stage_name}`
+                      : `${feedback.stage < feedback.previous_stage ? "↓" : "↑"} ${feedback.stage_name}`}
                   {feedback.stage >= 5 && feedback.next_review_at ? ` · next review ${new Date(feedback.next_review_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : ""}
                 </div>
               ) : null}

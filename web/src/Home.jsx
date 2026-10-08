@@ -210,11 +210,10 @@ function Sky({ sky, levels, go }) {
     const item = sky[levelIndex].items[itemIndex];
     const box = dot.getBoundingClientRect();
     const host = wrapRef.current.getBoundingClientRect();
-    setHover({
-      item, level: sky[levelIndex].level,
-      x: box.left - host.left + box.width / 2,
-      y: box.top - host.top,
-    });
+    // Keep the tooltip inside the map on both edges.
+    const half = 115;
+    const x = Math.max(half, Math.min(host.width - half, box.left - host.left + box.width / 2));
+    setHover({ item, level: sky[levelIndex].level, x, y: box.top - host.top });
   }
 
   return (

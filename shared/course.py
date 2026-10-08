@@ -457,7 +457,8 @@ def fetch_queue(db, level, mode, limit=BATCH):
         if mode == "relearn" and stage == 1:
             try:
                 item["card"] = fetch_inspect(db, sid)
-                item["card"].update({"image_url": item["image_url"], "needs_reading": reading})
+                # The card's SRS label is the old WaniKani snapshot; the course has its own.
+                item["card"].update({"image_url": item["image_url"], "needs_reading": reading, "srs_name": None})
             except Exception:
                 pass
         items.append(item)
@@ -620,6 +621,7 @@ def answer(db, subject_id, prompt_type, text=None, gave_up=False):
 def _with_reveal(db, payload, subject_id):
     try:
         payload["inspect"] = fetch_inspect(db, subject_id)
+        payload["inspect"]["srs_name"] = None  # old WK snapshot, not course state
     except Exception:
         payload["inspect"] = None
     return payload
