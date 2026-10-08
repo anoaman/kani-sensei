@@ -318,8 +318,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .recall-form { grid-template-columns: 1fr; }
   .prompt { padding-top: 12px; }
   .course-box { grid-template-columns: 1fr; }
-  .course-actions { grid-template-columns: 1fr 1fr; width: 100%; }
-  .course-actions .go-btn { width: 100%; }
+  .course-box > * { min-width: 0; }
+  .course-actions { grid-template-columns: minmax(0,1fr) minmax(0,1fr); width: 100%; }
+  .course-actions .go-btn { width: 100%; padding: 0 14px; }
   .item-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
   .item-grid.vocabulary { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
   .lesson-nav { flex-wrap: wrap; }
