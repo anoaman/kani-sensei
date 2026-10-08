@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
 import TestView from "./TestView.jsx";
+import CourseSession from "./CourseSession.jsx";
+import { LevelIndex, LevelPage } from "./LevelPages.jsx";
 
 const OVERVIEW_CACHE_KEY = "kani-overview-v2";
 const FOCUS_KEY = "kani-focus-v1";
@@ -25,7 +27,15 @@ const MAX_LEVEL = 60;
 
 function viewFromPath(pathname) {
   if (pathname.startsWith("/session") || pathname.startsWith("/drill")) return "session";
+  if (pathname.startsWith("/levels")) return "levels";
+  const match = pathname.match(/^\/level\/(\d+)(?:\/(lessons|reviews))?/);
+  if (match) return match[2] || "level";
   return "dojo";
+}
+
+function levelFromPath(pathname) {
+  const match = pathname.match(/^\/level\/(\d+)/);
+  return match ? Math.max(1, Math.min(60, Number(match[1]))) : 1;
 }
 
 function wantsCustomize(pathname) {
@@ -79,7 +89,7 @@ function HeatStrip({ levels, focusMin, focusMax, onPick }) {
         className={`heat-cell${focus ? " focus" : ""}${heat > 0.6 ? " hot" : ""}`}
         style={{ "--heat": (0.08 + 0.92 * heat).toFixed(2) }}
         title={`Level ${n} · ${level.accuracy ?? "—"}% accuracy · ${level.due || 0} due${flagged ? ` · ${flagged} flagged` : ""}`}
-        aria-label={`Drill level ${n}`}
+        aria-label={`Open level ${n}`}
         onClick={() => onPick(n)}
       >
         <b>{n}</b>
@@ -179,13 +189,13 @@ function Dojo({ data, navigate, onCustomize }) {
       <section className="dojo-heat">
         <div className="heat-head">
           <p className="kicker">Levels 1–60 · decay heat</p>
-          <span>Tap a level to drill it · outlined = today’s focus</span>
+          <span>Tap a level to open it · outlined = today’s focus</span>
         </div>
         <HeatStrip
           levels={levels}
           focusMin={min}
           focusMax={max}
-          onPick={(level) => navigate("session", { min: level, max: level, count: 10, types: "kanji,vocabulary", pool: "decay", go: 1 })}
+          onPick={(level) => navigate(`/level/${level}`)}
         />
         <div className="heat-legend">
           <span><i style={{ "--heat": 0.12 }} />Holding</span>
@@ -293,6 +303,7 @@ function Customize({ data, navigate, onClose }) {
 export default function App() {
   const [data, setData] = useState(readCache);
   const [view, setView] = useState(() => viewFromPath(window.location.pathname));
+  const [pathname, setPathname] = useState(window.location.pathname);
   const [focus, setFocus] = useState(false);
   const [customize, setCustomize] = useState(() => wantsCustomize(window.location.pathname));
   const [error, setError] = useState("");
@@ -310,7 +321,10 @@ export default function App() {
 
   useEffect(() => { load(); }, []);
   useEffect(() => {
-    const handler = () => setView(viewFromPath(window.location.pathname));
+    const handler = () => {
+      setView(viewFromPath(window.location.pathname));
+      setPathname(window.location.pathname);
+    };
     window.addEventListener("popstate", handler);
     return () => window.removeEventListener("popstate", handler);
   }, []);
@@ -327,11 +341,13 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // navigate("session", params) | navigate("dojo") | navigate("/level/3") — paths may carry a query.
   function navigate(next, params = null) {
-    const path = next === "session" ? "/session" : "/";
+    const path = next.startsWith("/") ? next : next === "session" ? "/session" : "/";
     const query = params ? `?${new URLSearchParams(params)}` : "";
     window.history.pushState({}, "", `${path}${query}`);
-    setView(next);
+    setView(viewFromPath(path));
+    setPathname(window.location.pathname);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -356,6 +372,7 @@ export default function App() {
           <div className="topbar-meta">
             <span className={`sync-dot ${dataMode || ""}`}>{syncNote}</span>
             {backlog != null ? <span className="wide-only">Queue {backlog}{recovery ? ` → healthy ${recovery}` : ""}</span> : null}
+            <button className="pill-btn" onClick={() => navigate("/levels")}>Levels</button>
             <button className="pill-btn" onClick={() => setCustomize(true)}>Customize <kbd className="wide-only">⌘K</kbd></button>
           </div>
         ) : null}
@@ -368,6 +385,11 @@ export default function App() {
       {error ? <div className="error global-error">{error}</div> : null}
       {view === "dojo" ? <Dojo data={data} navigate={navigate} onCustomize={() => setCustomize(true)} /> : null}
       {view === "session" ? <TestView key={window.location.search} data={data} title="Practice session" blurb="One focused round. Finish clean, then decide whether to continue." onHome={() => navigate("dojo")} onFocus={setFocus} /> : null}
+      {view === "levels" ? <LevelIndex go={navigate} /> : null}
+      {view === "level" ? <LevelPage key={pathname} level={levelFromPath(pathname)} go={navigate} /> : null}
+      {view === "lessons" || view === "reviews" ? (
+        <CourseSession key={pathname} level={levelFromPath(pathname)} mode={view} go={navigate} onFocus={setFocus} />
+      ) : null}
       {customize && !focus ? <Customize data={data} navigate={navigate} onClose={() => setCustomize(false)} /> : null}
     </div>
   );

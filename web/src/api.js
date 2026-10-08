@@ -43,6 +43,16 @@ export const api = {
     }),
   getDrill: (sessionId) =>
     request(`/api/drill?session_id=${encodeURIComponent(sessionId)}`),
+  levels: () => request("/api/course?action=levels"),
+  courseLevel: (level) => request(`/api/course?level=${encodeURIComponent(level)}`),
+  startCourse: (level) =>
+    request("/api/course?action=start", { method: "POST", body: JSON.stringify({ level }) }),
+  courseLessons: (level) =>
+    request(`/api/course?action=lessons&level=${encodeURIComponent(level)}`),
+  courseReviews: (level) =>
+    request(`/api/course?action=reviews${level ? `&level=${encodeURIComponent(level)}` : ""}`),
+  courseAnswer: (body) =>
+    request("/api/course?action=answer", { method: "POST", body: JSON.stringify(body) }),
   inspect: (subjectId) =>
     request(`/api/inspect?subject_id=${encodeURIComponent(subjectId)}`),
 };

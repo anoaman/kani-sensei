@@ -147,13 +147,6 @@ export default function TestView({
   const [maxLevel, setMaxLevel] = useState(defaultMax);
   const [count, setCount] = useState(query.count || defaultCount);
   const [mode, setMode] = useState("both");
-  const [autoAdvance, setAutoAdvance] = useState(() => {
-    try {
-      return window.localStorage.getItem("kani-auto-advance") !== "0";
-    } catch {
-      return true;
-    }
-  });
   const [session, setSession] = useState(null);
   const [index, setIndex] = useState(0);
   const [feedback, setFeedback] = useState(null);
@@ -171,7 +164,6 @@ export default function TestView({
   const composing = useRef(false);
   const inputRef = useRef(null);
   const autoStarted = useRef(false);
-  const nextRef = useRef(() => {});
 
   const objectTypes = query.types || defaultObjectTypes;
   const question = session?.questions?.[index] || null;
@@ -380,13 +372,6 @@ export default function TestView({
     setHint("");
   }
 
-  nextRef.current = next;
-
-  useEffect(() => {
-    if (!autoAdvance || !feedback?.correct || feedback?.almost || feedback?.score?.finished) return undefined;
-    const timer = window.setTimeout(() => nextRef.current(), 850);
-    return () => window.clearTimeout(timer);
-  }, [autoAdvance, feedback]);
 
   async function openRelated(subjectId) {
     try {
@@ -402,6 +387,8 @@ export default function TestView({
       const tag = (event.target.tagName || "").toLowerCase();
       if (showRecap || !session) return;
       if (feedback) {
+        // A held Enter must not submit and skip the answer in one press.
+        if (event.repeat) return;
         if (event.key === "Enter" || event.key === " " || event.key === "n") {
           event.preventDefault();
           next();
@@ -432,7 +419,7 @@ export default function TestView({
 
   function onKeyDown(event) {
     if (composing.current) return;
-    if (event.key !== "Enter") return;
+    if (event.key !== "Enter" || event.repeat) return;
     event.preventDefault();
     if (feedback) next();
     else submitText();
@@ -444,15 +431,6 @@ export default function TestView({
     setInspect(null);
     setWrapUp(false);
     autoStarted.current = true;
-  }
-
-  function persistAdvance(value) {
-    setAutoAdvance(value);
-    try {
-      window.localStorage.setItem("kani-auto-advance", value ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
   }
 
   return (
@@ -514,14 +492,6 @@ export default function TestView({
               {busy ? "Building…" : kind === "speed" ? "Start blitz" : "Begin"}
             </button>
           </div>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={autoAdvance}
-              onChange={(e) => persistAdvance(e.target.checked)}
-            />
-            Auto-advance on correct
-          </label>
           <p className="note">
             Enter checks · 1–4 picks a choice · ? skips · Space continues.
             {suggested.length ? ` Decay Map suggests ${suggested.join(", ")}.` : ""}
