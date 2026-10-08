@@ -134,3 +134,44 @@ class DrillBuildTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeDrillDb:
+    """Answers grade_drill's one select; swallows the writes."""
+
+    def __init__(self, prompt_type, accepted, kind="recall"):
+        self.row = (
+            "q1", 42, prompt_type, "大", "kanji", 1, accepted[0],
+            accepted, [], None, None, None,
+            kind, 0, 0, 5, 0, {},
+        )
+        self.writes = []
+
+    def has_relation(self, name):
+        return True
+
+    def execute(self, sql, params=None, fetch=False):
+        if fetch:
+            return [self.row]
+        self.writes.append((sql, params))
+        return None
+
+
+class DrillGradeTests(unittest.TestCase):
+    def grade(self, prompt_type, accepted, text):
+        from shared.drill import grade_drill
+        db = FakeDrillDb(prompt_type, accepted)
+        return grade_drill(db, "s1", "q1", text=text)
+
+    def test_typed_meaning_correct(self):
+        result = self.grade("meaning", ["Big", "Large"], "large")
+        self.assertTrue(result["correct"])
+        self.assertEqual(result["score"]["correct"], 1)
+
+    def test_typed_reading_romaji_correct(self):
+        result = self.grade("reading", ["だい", "たい"], "dai")
+        self.assertTrue(result["correct"])
+
+    def test_typed_wrong_answer(self):
+        result = self.grade("meaning", ["Big"], "small")
+        self.assertFalse(result["correct"])

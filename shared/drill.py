@@ -12,6 +12,7 @@ import random
 import uuid
 from datetime import datetime, timezone
 
+from shared.answers import grade_answer as check_typed
 from shared.inspect import fetch_inspect
 from shared.quiz import (
     build_question,
