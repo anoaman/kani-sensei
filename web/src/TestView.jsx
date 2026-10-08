@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { toKana } from "wanakana";
 import { api } from "./api.js";
 import InspectCard from "./InspectCard.jsx";
 import { T } from "./Term.jsx";
@@ -320,7 +321,9 @@ export default function TestView({
 
   async function submitText(value = typed) {
     if (!session || !question || feedback || busy) return;
-    const trimmed = (value || "").trim();
+    // Flush a dangling "n" (かn -> かん) before grading a reading.
+    const raw = question.prompt_type === "reading" ? toKana((value || "").toLowerCase()) : value;
+    const trimmed = (raw || "").trim();
     if (!trimmed) return;
     setBusy(true);
     setError("");
@@ -584,8 +587,8 @@ export default function TestView({
                 {isTyped && !feedback ? (
                   <p className="note">
                     {question.prompt_type === "reading"
-                      ? "Type the reading — hiragana or romaji."
-                      : "Type an accepted English meaning."}
+                      ? "Reading: type romaji, it turns into kana."
+                      : "Meaning: type it in English."}
                   </p>
                 ) : null}
               </div>
@@ -605,9 +608,18 @@ export default function TestView({
                     autoCapitalize="off"
                     autoCorrect="off"
                     spellCheck={false}
-                    placeholder={question.prompt_type === "reading" ? "よみ / yomi" : "meaning"}
+                    className={question.prompt_type === "reading" ? "answer-reading" : "answer-meaning"}
+                    placeholder={question.prompt_type === "reading" ? "答え" : "Your response"}
+                    lang={question.prompt_type === "reading" ? "ja" : "en"}
                     onChange={(e) => {
-                      setTyped(e.target.value);
+                      // Reading prompts convert romaji to kana as you type, like WaniKani.
+                      // A native Japanese IME already produces kana, so leave composition alone.
+                      const value = e.target.value;
+                      setTyped(
+                        question.prompt_type === "reading" && !composing.current
+                          ? toKana(value.toLowerCase(), { IMEMode: true })
+                          : value,
+                      );
                       if (hint) setHint("");
                     }}
                     onKeyDown={onKeyDown}
