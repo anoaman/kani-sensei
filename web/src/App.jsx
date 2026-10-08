@@ -1,8 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "./api.js";
 import TestView from "./TestView.jsx";
 import CourseSession from "./CourseSession.jsx";
 import { LevelIndex, LevelPage } from "./LevelPages.jsx";
+import Home from "./Home.jsx";
+
+// /level/N/continue: jump to whatever that level needs most, else its page.
+function ContinueRoute({ level, go }) {
+  useEffect(() => {
+    api.courseLevel(level)
+      .then((data) => go(data.course.next_mode ? `/level/${level}/${data.course.next_mode}` : `/level/${level}`))
+      .catch(() => go(`/level/${level}`));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [level]);
+  return <p className="muted panel">Finding your next step…</p>;
+}
 
 const OVERVIEW_CACHE_KEY = "kani-overview-v2";
 const FOCUS_KEY = "kani-focus-v1";
@@ -23,13 +35,12 @@ function writeCache(value) {
   }
 }
 
-const MAX_LEVEL = 60;
 
 function viewFromPath(pathname) {
   if (pathname.startsWith("/session") || pathname.startsWith("/drill")) return "session";
   if (pathname.startsWith("/levels")) return "levels";
-  const match = pathname.match(/^\/level\/(\d+)(?:\/(lessons|reviews))?/);
-  if (match) return match[2] || "level";
+  const match = pathname.match(/^\/level\/(\d+)(?:\/(check|relearn|reviews|ahead|continue))?/);
+  if (match) return match[2] ? (match[2] === "continue" ? "continue" : "course") : "level";
   return "dojo";
 }
 
@@ -40,172 +51,6 @@ function levelFromPath(pathname) {
 
 function wantsCustomize(pathname) {
   return ["/practice", "/kanji", "/vocab", "/ghosts", "/leeches", "/warmup", "/glossary"].some((prefix) => pathname.startsWith(prefix));
-}
-
-function formatSync(value) {
-  if (!value) return "Waiting for first sync";
-  return `Synced ${new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
-}
-
-function formatDay(value) {
-  if (!value) return null;
-  const date = new Date(`${value}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-function levelRange(min, max) {
-  return min === max ? `Level ${min}` : `Levels ${min}–${max}`;
-}
-
-function typeLabel(type) {
-  return { kanji: "Kanji", vocabulary: "Vocabulary", radical: "Radical", kana_vocabulary: "Vocabulary" }[type] || type;
-}
-
-function sessionFromPrescription(data) {
-  const prescription = data?.prescription || {};
-  const count = prescription.count || 10;
-  const min = prescription.min_level || 1;
-  const max = prescription.max_level || min;
-  return { count, min, max, minutes: prescription.minutes || Math.max(4, Math.ceil(count * 0.55)) };
-}
-
-function HeatStrip({ levels, focusMin, focusMax, onPick }) {
-  const byLevel = new Map(levels.map((level) => [level.level, level]));
-  const peak = Math.max(20, ...levels.map((level) => Number(level.risk || 0)));
-  const cells = [];
-  for (let n = 1; n <= MAX_LEVEL; n += 1) {
-    const level = byLevel.get(n);
-    if (!level) {
-      cells.push(<span key={n} className="heat-cell off" aria-hidden="true" />);
-      continue;
-    }
-    const heat = Math.min(1, Number(level.risk || 0) / peak);
-    const focus = n >= focusMin && n <= focusMax;
-    const flagged = Number(level.high || 0) + Number(level.medium || 0);
-    cells.push(
-      <button
-        key={n}
-        className={`heat-cell${focus ? " focus" : ""}${heat > 0.6 ? " hot" : ""}`}
-        style={{ "--heat": (0.08 + 0.92 * heat).toFixed(2) }}
-        title={`Level ${n} · ${level.accuracy ?? "—"}% accuracy · ${level.due || 0} due${flagged ? ` · ${flagged} flagged` : ""}`}
-        aria-label={`Open level ${n}`}
-        onClick={() => onPick(n)}
-      >
-        <b>{n}</b>
-      </button>
-    );
-  }
-  return <div className="heat-strip">{cells}</div>;
-}
-
-function Dojo({ data, navigate, onCustomize }) {
-  const { count, min, max, minutes } = sessionFromPrescription(data);
-  const prescription = data?.prescription || {};
-  const items = data?.decay?.items || [];
-  const levels = data?.decay?.levels || [];
-  const suggested = data?.decay?.summary?.suggested_levels || [];
-  const queue = items.filter((item) => !suggested.length || suggested.includes(item.level)).slice(0, count);
-  const hero = queue[0] || items[0];
-  const kanji = prescription.type_counts?.kanji || 0;
-  const vocabulary = prescription.type_counts?.vocabulary || 0;
-  const runway = data?.runway || {};
-  const practice = data?.practice || {};
-  const notebook = practice.notebook || [];
-  const backlog = Number(runway.current_backlog ?? 0);
-  const floor = Number(runway.healthy_floor || 0);
-  const recovery = formatDay(runway.projected_recovery_date);
-  const start = () => navigate("session", { min, max, count, types: "kanji,vocabulary", pool: "decay", go: 1 });
-
-  useEffect(() => {
-    function onKey(event) {
-      if (event.key !== "Enter" || event.metaKey || event.ctrlKey || event.altKey) return;
-      const tag = event.target?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON" || tag === "A") return;
-      event.preventDefault();
-      start();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
-
-  return (
-    <main className="dojo">
-      <section className="dojo-stage">
-        <div className="dojo-hero">
-          <p className="kicker">{hero ? "Softest item right now" : "Nothing slipping"}</p>
-          <div className="hero-glyph" lang="ja">{hero?.characters || "休"}</div>
-          {hero ? (
-            <p className="hero-hint">
-              <span className="tag">Level {hero.level} · {typeLabel(hero.type)}</span>
-              <span>{hero.accuracy}% accuracy over {hero.attempts} reviews<span className="wide-only"> · meaning hidden until you answer</span></span>
-            </p>
-          ) : <p className="hero-hint"><span>Every level is holding. A short warm-up still keeps it that way.</span></p>}
-          <h1>{count} items worth fixing.</h1>
-          <p className="hero-sub">
-            {levelRange(min, max)} · {kanji} kanji, {vocabulary} vocabulary · about {minutes} minutes · typed recall
-          </p>
-          <div className="hero-actions">
-            <button className="go-btn" onClick={start}>Start session <kbd>Enter</kbd></button>
-            <a className="quiet-link" href="https://www.wanikani.com/subjects/review" target="_blank" rel="noreferrer">Then open WaniKani ↗</a>
-          </div>
-          {queue.length ? (
-            <div className="queue-row" aria-label="Session items">
-              {queue.map((item, index) => (
-                <span key={item.subject_id} className={index === 0 ? "queue-tile now" : "queue-tile"} lang="ja" title={`Level ${item.level} · ${typeLabel(item.type)}`}>{item.characters}</span>
-              ))}
-            </div>
-          ) : null}
-        </div>
-
-        <aside className="dojo-side">
-          <div className="side-stat">
-            <p className="kicker">Review queue</p>
-            <strong>{backlog}<small>/ {floor || "—"} healthy</small></strong>
-            {floor ? <span className="side-bar"><i style={{ width: `${Math.min(100, (floor / Math.max(backlog, 1)) * 100)}%` }} /></span> : null}
-            <p>{runway.queue_label || "Queue snapshot"}{recovery ? ` · back to healthy ${recovery}` : ""}</p>
-          </div>
-          <div className="side-stat">
-            <p className="kicker">This week</p>
-            <strong>{practice.week_sessions || 0}<small>{Number(practice.week_sessions) === 1 ? "session" : "sessions"}</small></strong>
-            <p>
-              {practice.week_accuracy != null ? `${practice.week_accuracy}% accuracy · ` : ""}
-              Best combo {practice.combo_best || 0}
-            </p>
-          </div>
-          <div className="side-stat">
-            <p className="kicker">Missed lately</p>
-            {notebook.length ? (
-              <>
-                <div className="missed-row">{notebook.slice(0, 6).map((item) => <span key={item.subject_id} lang="ja" title={item.meaning}>{item.characters}</span>)}</div>
-                <p>Goes into the next session automatically</p>
-              </>
-            ) : <p>No misses logged yet.</p>}
-          </div>
-          <button className="quiet-link side-customize" onClick={onCustomize}>Customize a session →</button>
-        </aside>
-      </section>
-
-      <section className="dojo-heat">
-        <div className="heat-head">
-          <p className="kicker">Levels 1–60 · decay heat</p>
-          <span>Tap a level to open it · outlined = today’s focus</span>
-        </div>
-        <HeatStrip
-          levels={levels}
-          focusMin={min}
-          focusMax={max}
-          onPick={(level) => navigate(`/level/${level}`)}
-        />
-        <div className="heat-legend">
-          <span><i style={{ "--heat": 0.12 }} />Holding</span>
-          <span><i style={{ "--heat": 0.55 }} />Slipping</span>
-          <span><i style={{ "--heat": 0.95 }} />Needs you</span>
-          <span><i className="off" />Not reached</span>
-        </div>
-      </section>
-    </main>
-  );
 }
 
 function readFocus(suggested = []) {
@@ -351,8 +196,6 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  const syncNote = useMemo(() => formatSync(data?.last_sync?.finished_at), [data]);
-  const dataMode = data?.data_status?.mode;
   if (!data) {
     return (
       <div className="loading-screen">
@@ -361,8 +204,6 @@ export default function App() {
     );
   }
 
-  const backlog = data?.runway?.current_backlog;
-  const recovery = formatDay(data?.runway?.projected_recovery_date);
 
   return (
     <div className={`app-shell ${focus ? "is-focus" : ""}`}>
@@ -370,26 +211,20 @@ export default function App() {
         <button className="brand-mark" onClick={() => navigate("dojo")}><span className="seal" lang="ja">先</span><strong>Kani Sensei</strong></button>
         {!focus ? (
           <div className="topbar-meta">
-            <span className={`sync-dot ${dataMode || ""}`}>{syncNote}</span>
-            {backlog != null ? <span className="wide-only">Queue {backlog}{recovery ? ` → healthy ${recovery}` : ""}</span> : null}
             <button className="pill-btn" onClick={() => navigate("/levels")}>Levels</button>
             <button className="pill-btn" onClick={() => setCustomize(true)}>Customize <kbd className="wide-only">⌘K</kbd></button>
           </div>
         ) : null}
       </header>
-      {dataMode === "cached" || dataMode === "stale" ? (
-        <div className={`data-notice ${dataMode}`} role="status">
-          <strong>{dataMode === "stale" ? "Cached snapshot" : "Cached data"}</strong><span>{syncNote}. Practice works; new WaniKani progress is paused.</span>
-        </div>
-      ) : null}
       {error ? <div className="error global-error">{error}</div> : null}
-      {view === "dojo" ? <Dojo data={data} navigate={navigate} onCustomize={() => setCustomize(true)} /> : null}
+      {view === "dojo" ? <Home go={navigate} /> : null}
       {view === "session" ? <TestView key={window.location.search} data={data} title="Practice session" blurb="One focused round. Finish clean, then decide whether to continue." onHome={() => navigate("dojo")} onFocus={setFocus} /> : null}
       {view === "levels" ? <LevelIndex go={navigate} /> : null}
       {view === "level" ? <LevelPage key={pathname} level={levelFromPath(pathname)} go={navigate} /> : null}
-      {view === "lessons" || view === "reviews" ? (
-        <CourseSession key={pathname} level={levelFromPath(pathname)} mode={view} go={navigate} onFocus={setFocus} />
+      {view === "course" ? (
+        <CourseSession key={pathname} level={levelFromPath(pathname)} mode={pathname.split("/")[3]} go={navigate} onFocus={setFocus} />
       ) : null}
+      {view === "continue" ? <ContinueRoute key={pathname} level={levelFromPath(pathname)} go={navigate} /> : null}
       {customize && !focus ? <Customize data={data} navigate={navigate} onClose={() => setCustomize(false)} /> : null}
     </div>
   );

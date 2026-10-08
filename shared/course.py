@@ -1,11 +1,20 @@
-"""Level courses: a local WaniKani-style SRS, one level at a time.
+"""Level courses: a returnee's SRS, one level at a time.
 
-Restarting a level wipes its course rows and starts fresh. Radicals unlock
-first; a kanji unlocks once every component radical is at Guru, a vocab
-word once every component kanji is. Components outside the course (earlier
-levels you didn't restart) count as known. Lessons graduate items to
-Apprentice 1; reviews move them up or down with WaniKani's intervals and
-penalty. A level passes when 90% of its kanji reach Guru.
+Built for someone who passed these levels before and is coming back, so it
+does not replay WaniKani's first-time ladder:
+
+- Check: restarting a level puts every item up for a placement check, no
+  unlock gating. Both halves right first try -> straight to Guru. Any miss ->
+  Relearn at Apprentice 1, with the teaching card shown.
+- Relearn: Apprentice items are always available. A clean pass climbs one
+  stage, a miss drops one. The session spaces repeats, so a rotten item can
+  get back to Guru in one sitting.
+- Reviews: Guru and up run on real time (1 week, 2 weeks, 1 month, 4
+  months) with WaniKani's penalty. That's where retention is actually proven.
+- Study ahead: Guru+ items can be practised early. Right answers don't move
+  them up (no fake progress); misses still drop them, because rot is rot.
+
+A level passes when 90% of its kanji are at Guru or above.
 """
 
 from __future__ import annotations
@@ -22,13 +31,12 @@ from shared.quiz import _accepted_meanings, _accepted_readings, _parse_json
 TYPE_ORDER = {"radical": 0, "kanji": 1, "vocabulary": 2, "kana_vocabulary": 2}
 GURU = 5
 BURNED = 9
-LESSON_BATCH = 5
+BATCH = 10
 PASS_RATIO = 0.9
+MODES = ("check", "relearn", "reviews", "ahead")
 
-# Hours until the next review after reaching each stage (WaniKani's SRS).
-INTERVALS = {1: 4, 2: 8, 3: 23, 4: 47, 5: 167, 6: 335, 7: 719, 8: 2879}
-# Levels 1-2 run the accelerated early ladder.
-ACCELERATED = {1: 2, 2: 4, 3: 8, 4: 23, 5: 167, 6: 335, 7: 719, 8: 2879}
+# Hours until the next review after reaching each Guru+ stage (WaniKani).
+INTERVALS = {5: 167, 6: 335, 7: 719, 8: 2879}
 
 SCHEMA_STATEMENTS = (
     """
@@ -87,21 +95,18 @@ def ensure_schema(db):
 
 # --- SRS math (pure) -------------------------------------------------------
 
-def interval_hours(stage, level):
-    table = ACCELERATED if level <= 2 else INTERVALS
-    return table.get(stage)
-
-
-def next_available(stage, level, now):
-    hours = interval_hours(stage, level)
-    if hours is None:
+def next_available(stage, now):
+    """Apprentice is always open; Guru+ waits on WaniKani's real-time gaps."""
+    if stage >= BURNED:
         return None
+    hours = INTERVALS.get(stage)
+    if hours is None:
+        return now
     # WaniKani rounds review times down to the hour.
-    due = now + timedelta(hours=hours)
-    return due.replace(minute=0, second=0, microsecond=0)
+    return (now + timedelta(hours=hours)).replace(minute=0, second=0, microsecond=0)
 
 
-def next_stage(stage, meaning_wrong, reading_wrong):
+def review_stage(stage, meaning_wrong, reading_wrong):
     """WaniKani's rule: drop ceil(wrong/2) stages, doubled from Guru up."""
     wrong = int(meaning_wrong) + int(reading_wrong)
     if wrong == 0:
@@ -110,34 +115,39 @@ def next_stage(stage, meaning_wrong, reading_wrong):
     return max(1, stage - math.ceil(wrong / 2) * penalty)
 
 
+def outcome(mode, stage, meaning_wrong, reading_wrong):
+    """New stage after an item's halves are done in the given mode."""
+    wrong = int(meaning_wrong) + int(reading_wrong)
+    if mode == "check":
+        return GURU if wrong == 0 else 1
+    if mode == "relearn":
+        return stage + 1 if wrong == 0 else max(1, stage - 1)
+    if mode == "ahead":
+        return stage if wrong == 0 else review_stage(stage, meaning_wrong, reading_wrong)
+    return review_stage(stage, meaning_wrong, reading_wrong)
+
+
+def mode_for(stage, available_at, now):
+    if stage <= 0:
+        return "check"
+    if stage < GURU:
+        return "relearn"
+    if stage >= BURNED:
+        return None
+    if available_at and available_at <= now:
+        return "reviews"
+    return "ahead"
+
+
 def needs_reading(object_type, readings):
     return object_type in ("kanji", "vocabulary") and bool(readings)
 
 
-def unlockable(items, stages_outside=None):
-    """Return subject ids that should unlock now.
-
-    items: {subject_id: {"unlocked": bool, "stage": int, "components": [ids]}}
-    stages_outside: stages of component ids in the course but other levels.
-    """
-    stages = {sid: item["stage"] for sid, item in items.items()}
-    stages.update(stages_outside or {})
-    ready = []
-    for sid, item in items.items():
-        if item["unlocked"]:
-            continue
-        if all(stages.get(cid, GURU) >= GURU for cid in item["components"]):
-            ready.append(sid)
-    return ready
-
-
-def stage_bucket(stage, unlocked=True):
-    if not unlocked:
-        return "locked"
+def stage_bucket(stage):
     if stage <= 0:
-        return "lesson"
+        return "unchecked"
     if stage <= 4:
-        return "apprentice"
+        return "relearn"
     if stage <= 6:
         return "guru"
     return {7: "master", 8: "enlightened"}.get(stage, "burned")
@@ -176,11 +186,9 @@ def _subject_rows(db, level):
     return db.execute(
         """
         select s.id, s.object_type, s.characters, s.slug, s.primary_meaning,
-               s.meanings, s.readings, s.raw, a.srs_stage,
-               c.srs_stage, c.unlocked_at, c.available_at, c.passed_at, c.burned_at,
+               s.readings, s.raw, c.srs_stage, c.available_at,
                c.subject_id is not null
         from wk_subjects s
-        left join wk_assignments a on a.subject_id = s.id
         left join course_items c on c.subject_id = s.id
         where s.level = %s and (s.raw->>'hidden_at') is null
         """,
@@ -190,12 +198,12 @@ def _subject_rows(db, level):
 
 
 def _shape_item(row, level):
-    (sid, object_type, characters, slug, meaning, meanings_raw, readings_raw,
-     raw, wk_stage, stage, unlocked_at, available_at, passed_at, burned_at,
-     in_course) = row
+    (sid, object_type, characters, slug, meaning, readings_raw, raw, stage,
+     available_at, in_course) = row
     raw = _parse_json(raw) if not isinstance(raw, dict) else raw
     readings = labeled_readings(readings_raw)
     primary = next((r["reading"] for r in readings if r["primary"]), None)
+    stage = int(stage or 0)
     return {
         "subject_id": sid,
         "type": "vocabulary" if object_type == "kana_vocabulary" else object_type,
@@ -207,15 +215,11 @@ def _shape_item(row, level):
         "meaning": meaning,
         "reading": primary or (readings[0]["reading"] if readings else None),
         "lesson_position": raw.get("lesson_position") or 0,
-        "components": [int(i) for i in raw.get("component_subject_ids") or []],
-        "wk_stage": wk_stage,
         "in_course": bool(in_course),
-        "stage": int(stage or 0) if in_course else None,
-        "stage_name": SRS_NAMES.get(int(stage or 0)) if in_course else None,
-        "bucket": stage_bucket(int(stage or 0), bool(unlocked_at)) if in_course else None,
+        "stage": stage if in_course else None,
+        "stage_name": (SRS_NAMES.get(stage) if stage else "unchecked") if in_course else None,
+        "bucket": stage_bucket(stage) if in_course else None,
         "available_at": _iso(available_at),
-        "passed": bool(passed_at),
-        "burned": bool(burned_at),
     }
 
 
@@ -228,18 +232,15 @@ def level_summary(items, level_row, now=None):
     course = [item for item in items if item["in_course"]]
     kanji = [item for item in items if item["type"] == "kanji"]
     kanji_guru = sum(1 for item in kanji if item["in_course"] and (item["stage"] or 0) >= GURU)
-    need = math.ceil(len(kanji) * PASS_RATIO)
-    lessons = sum(1 for item in course if item["bucket"] == "lesson")
-    due_times = []
-    reviews = 0
+    counts = {mode: 0 for mode in MODES}
+    upcoming = []
     for item in course:
-        if not (1 <= (item["stage"] or 0) <= 8) or not item["available_at"]:
-            continue
-        at = datetime.fromisoformat(item["available_at"])
-        if at <= now:
-            reviews += 1
-        else:
-            due_times.append(at)
+        at = datetime.fromisoformat(item["available_at"]) if item["available_at"] else None
+        mode = mode_for(item["stage"] or 0, at, now)
+        if mode:
+            counts[mode] += 1
+        if mode == "ahead" and at:
+            upcoming.append(at)
     buckets = {}
     for item in course:
         buckets[item["bucket"]] = buckets.get(item["bucket"], 0) + 1
@@ -249,13 +250,17 @@ def level_summary(items, level_row, now=None):
         "started_at": _iso(started_at),
         "passed_at": _iso(passed_at),
         "reset_count": reset_count or 0,
-        "lessons": lessons,
-        "reviews": reviews,
-        "next_review_at": _iso(min(due_times)) if due_times else None,
+        **counts,
+        "known": sum(1 for item in course if (item["stage"] or 0) >= GURU),
+        "total": len(items),
+        "next_review_at": _iso(min(upcoming)) if upcoming else None,
         "kanji_guru": kanji_guru,
         "kanji_total": len(kanji),
-        "kanji_needed": need,
+        "kanji_needed": math.ceil(len(kanji) * PASS_RATIO),
         "buckets": buckets,
+        "next_mode": next(
+            (mode for mode in ("reviews", "relearn", "check") if counts[mode]), None
+        ),
     }
 
 
@@ -286,8 +291,10 @@ def fetch_levels(db):
                count(*) filter (where s.object_type = 'kanji'),
                count(*) filter (where s.object_type in ('vocabulary', 'kana_vocabulary')),
                count(c.subject_id) filter (where s.object_type = 'kanji' and c.srs_stage >= %s),
-               count(c.subject_id) filter (where c.unlocked_at is not null and c.srs_stage = 0),
-               count(c.subject_id) filter (where c.srs_stage between 1 and 8 and c.available_at <= now()),
+               count(c.subject_id) filter (where c.srs_stage >= %s),
+               count(c.subject_id) filter (where c.srs_stage = 0),
+               count(c.subject_id) filter (where c.srs_stage between 1 and 4),
+               count(c.subject_id) filter (where c.srs_stage between 5 and 8 and c.available_at <= now()),
                bool_or(l.level is not null),
                bool_or(l.passed_at is not null)
         from wk_subjects s
@@ -297,7 +304,7 @@ def fetch_levels(db):
         group by s.level
         order by s.level
         """,
-        [GURU],
+        [GURU, GURU],
         fetch=True,
     )
     return {
@@ -307,45 +314,48 @@ def fetch_levels(db):
                 "radicals": radicals,
                 "kanji": kanji,
                 "vocabulary": vocab,
+                "total": radicals + kanji + vocab,
                 "kanji_guru": kanji_guru,
                 "kanji_needed": math.ceil(kanji * PASS_RATIO),
-                "lessons": lessons,
+                "known": known,
+                "check": check,
+                "relearn": relearn,
                 "reviews": reviews,
                 "started": bool(started),
                 "passed": bool(passed),
             }
-            for (level, radicals, kanji, vocab, kanji_guru, lessons, reviews,
-                 started, passed) in rows
+            for (level, radicals, kanji, vocab, kanji_guru, known, check, relearn,
+                 reviews, started, passed) in rows
         ]
     }
 
 
-def _run_unlocks(db, now):
-    """Unlock every locked course item whose components are all at Guru."""
+def fetch_sky(db):
+    """Every item as one dot: level, type, glyph, bucket. Feeds the home map."""
+    ensure_schema(db)
     rows = db.execute(
         """
-        select c.subject_id, c.srs_stage, c.unlocked_at is not null,
-               coalesce(s.raw->'component_subject_ids', '[]'::jsonb)
-        from course_items c
-        join wk_subjects s on s.id = c.subject_id
+        select s.level, s.id, s.object_type, s.characters, s.primary_meaning,
+               c.srs_stage, coalesce((s.raw->>'lesson_position')::int, 0)
+        from wk_subjects s
+        left join course_items c on c.subject_id = s.id
+        where (s.raw->>'hidden_at') is null
+        order by s.level,
+                 case s.object_type when 'radical' then 0 when 'kanji' then 1 else 2 end,
+                 7, s.id
         """,
         fetch=True,
     )
-    items = {
-        sid: {
-            "stage": int(stage or 0),
-            "unlocked": bool(unlocked),
-            "components": [int(i) for i in _parse_json(components)],
-        }
-        for sid, stage, unlocked, components in rows
-    }
-    ready = unlockable(items)
-    if ready:
-        db.execute(
-            "update course_items set unlocked_at = %s where subject_id = any(%s)",
-            [now, ready],
-        )
-    return ready
+    levels = {}
+    for level, sid, object_type, characters, meaning, stage, _pos in rows:
+        levels.setdefault(level, []).append([
+            sid,
+            {"radical": "r", "kanji": "k"}.get(object_type, "v"),
+            characters or "",
+            meaning or "",
+            None if stage is None else int(stage),
+        ])
+    return {"levels": [{"level": level, "items": items} for level, items in sorted(levels.items())]}
 
 
 def _check_pass(db, level, now):
@@ -369,7 +379,7 @@ def _check_pass(db, level, now):
 
 
 def start_level(db, level):
-    """Start (or restart) a level course from zero."""
+    """Start (or restart) a level: every item goes up for a placement check."""
     ensure_schema(db)
     now = _now()
     db.execute("delete from course_items where level = %s", [level])
@@ -386,61 +396,41 @@ def start_level(db, level):
     )
     db.execute(
         """
-        insert into course_items (subject_id, level, object_type)
-        select id, level, object_type from wk_subjects
+        insert into course_items (subject_id, level, object_type, unlocked_at, available_at)
+        select id, level, object_type, %s, %s from wk_subjects
         where level = %s and (raw->>'hidden_at') is null
         """,
-        [level],
+        [now, now, level],
     )
-    _run_unlocks(db, now)
     return fetch_level(db, level)
 
 
-def _card(db, subject_id, extra=None):
-    card = fetch_inspect(db, subject_id)
-    card.update(extra or {})
-    return card
+_QUEUE_FILTERS = {
+    "check": ("c.srs_stage = 0", "case s.object_type when 'radical' then 0 when 'kanji' then 1 else 2 end, "
+              "coalesce((s.raw->>'lesson_position')::int, 0), s.id"),
+    "relearn": ("c.srs_stage between 1 and 4", "c.srs_stage, c.available_at, s.id"),
+    "reviews": ("c.srs_stage between 5 and 8 and c.available_at <= now()", "c.available_at, s.id"),
+    "ahead": ("c.srs_stage between 5 and 8 and c.available_at > now()", "c.available_at, s.id"),
+}
 
 
-def fetch_lessons(db, level, limit=LESSON_BATCH):
+def fetch_queue(db, level, mode, limit=BATCH):
+    """Next items for a mode. Relearn items on Apprentice 1 carry a teaching card."""
     ensure_schema(db)
+    if mode not in _QUEUE_FILTERS:
+        raise ValueError("mode must be one of " + ", ".join(MODES))
+    where, order = _QUEUE_FILTERS[mode]
     rows = db.execute(
-        """
-        select c.subject_id, s.object_type, s.characters, s.readings, s.raw
-        from course_items c
-        join wk_subjects s on s.id = c.subject_id
-        where c.level = %s and c.unlocked_at is not null and c.srs_stage = 0
-        order by case s.object_type when 'radical' then 0 when 'kanji' then 1 else 2 end,
-                 coalesce((s.raw->>'lesson_position')::int, 0), s.id
-        limit %s
-        """,
-        [level, limit],
-        fetch=True,
-    )
-    lessons = []
-    for sid, object_type, characters, readings_raw, raw in rows:
-        raw = _parse_json(raw) if not isinstance(raw, dict) else raw
-        readings = _accepted_readings(readings_raw)
-        lessons.append(_card(db, sid, {
-            "image_url": None if characters else image_url(raw),
-            "needs_reading": needs_reading(object_type, readings),
-        }))
-    return {"level": level, "lessons": lessons}
-
-
-def fetch_reviews(db, level=None):
-    ensure_schema(db)
-    rows = db.execute(
-        """
+        f"""
         select c.subject_id, c.level, s.object_type, s.characters, s.primary_meaning,
                s.readings, s.raw, c.srs_stage, c.meaning_ok, c.reading_ok
         from course_items c
         join wk_subjects s on s.id = c.subject_id
-        where c.srs_stage between 1 and 8 and c.available_at <= now()
-          and (%s::int is null or c.level = %s::int)
-        order by c.available_at, c.subject_id
+        where c.level = %s and {where}
+        order by {order}
+        limit %s
         """,
-        [level, level],
+        [level, limit],
         fetch=True,
     )
     items = []
@@ -453,17 +443,25 @@ def fetch_reviews(db, level=None):
             prompts.append("meaning")
         if reading and not reading_ok:
             prompts.append("reading")
-        items.append({
+        item = {
             "subject_id": sid,
             "level": item_level,
             "type": "vocabulary" if object_type == "kana_vocabulary" else object_type,
             "characters": characters,
             "image_url": None if characters else image_url(raw),
             "stage": stage,
-            "stage_name": SRS_NAMES.get(stage),
-            "prompts": prompts,
-        })
-    return {"level": level, "reviews": items}
+            "stage_name": SRS_NAMES.get(stage) if stage else "unchecked",
+            "needs_reading": reading,
+            "prompts": prompts or (["meaning", "reading"] if reading else ["meaning"]),
+        }
+        if mode == "relearn" and stage == 1:
+            try:
+                item["card"] = fetch_inspect(db, sid)
+                item["card"].update({"image_url": item["image_url"], "needs_reading": reading})
+            except Exception:
+                pass
+        items.append(item)
+    return {"level": level, "mode": mode, "items": items}
 
 
 def _whitelist(raw):
@@ -493,7 +491,7 @@ def _other(kind):
 
 
 def answer(db, subject_id, prompt_type, text=None, gave_up=False):
-    """Grade one half of a lesson-quiz or review item."""
+    """Grade one half of an item in whatever mode it is in right now."""
     from shared.drill import wrong_type_hint
 
     ensure_schema(db)
@@ -501,9 +499,9 @@ def answer(db, subject_id, prompt_type, text=None, gave_up=False):
         raise ValueError("prompt_type must be meaning or reading")
     rows = db.execute(
         """
-        select c.level, c.srs_stage, c.unlocked_at, c.available_at, c.passed_at,
+        select c.level, c.srs_stage, c.available_at,
                c.meaning_ok, c.reading_ok, c.meaning_wrong, c.reading_wrong,
-               s.object_type, s.characters, s.primary_meaning, s.meanings, s.readings, s.raw
+               s.object_type, s.primary_meaning, s.meanings, s.readings, s.raw
         from course_items c
         join wk_subjects s on s.id = c.subject_id
         where c.subject_id = %s
@@ -513,23 +511,19 @@ def answer(db, subject_id, prompt_type, text=None, gave_up=False):
     )
     if not rows:
         raise ValueError("item is not in a course")
-    (level, stage, unlocked_at, available_at, passed_at, meaning_ok, reading_ok,
-     meaning_wrong, reading_wrong, object_type, characters, primary_meaning,
-     meanings_raw, readings_raw, raw) = rows[0]
+    (level, stage, available_at, meaning_ok, reading_ok, meaning_wrong,
+     reading_wrong, object_type, primary_meaning, meanings_raw, readings_raw,
+     raw) = rows[0]
     raw = _parse_json(raw) if not isinstance(raw, dict) else raw
     now = _now()
-
-    if stage == 0 and unlocked_at:
-        mode = "lesson"
-    elif 1 <= stage <= 8 and available_at and available_at <= now:
-        mode = "review"
-    else:
-        raise ValueError("item is not up for lessons or review")
+    mode = mode_for(int(stage or 0), available_at, now)
+    if not mode:
+        raise ValueError("burned items are done")
 
     readings = _accepted_readings(readings_raw)
     has_reading = needs_reading(object_type, readings)
     if prompt_type == "reading" and not has_reading:
-        raise ValueError("this item has no reading to review")
+        raise ValueError("this item has no reading")
 
     if gave_up:
         result, submitted = "wrong", ""
@@ -551,14 +545,15 @@ def answer(db, subject_id, prompt_type, text=None, gave_up=False):
                 return {"subject_id": subject_id, "retry": True, "hint": hint}
 
     correct = result in ("correct", "almost")
+    # A check is one look per half: a miss closes the half too. Everywhere
+    # else a half stays open until it's right, and each miss is counted.
+    closes = correct or mode == "check"
     if prompt_type == "meaning":
-        meaning_ok = meaning_ok or correct
-        if not correct and mode == "review":
-            meaning_wrong += 1
+        meaning_ok = meaning_ok or closes
+        meaning_wrong += 0 if correct else 1
     else:
-        reading_ok = reading_ok or correct
-        if not correct and mode == "review":
-            reading_wrong += 1
+        reading_ok = reading_ok or closes
+        reading_wrong += 0 if correct else 1
 
     done = meaning_ok and (reading_ok or not has_reading)
     payload = {
@@ -569,7 +564,9 @@ def answer(db, subject_id, prompt_type, text=None, gave_up=False):
         "gave_up": bool(gave_up),
         "submitted": submitted,
         "item_done": done,
-        "unlocked": [],
+        "previous_stage": stage,
+        "stage": stage,
+        "stage_name": SRS_NAMES.get(stage) if stage else "unchecked",
         "level_passed": False,
     }
 
@@ -582,55 +579,40 @@ def answer(db, subject_id, prompt_type, text=None, gave_up=False):
             """,
             [meaning_ok, reading_ok, meaning_wrong, reading_wrong, subject_id],
         )
-        payload["stage"] = stage
-        payload["stage_name"] = SRS_NAMES.get(stage)
         return _with_reveal(db, payload, subject_id)
 
-    if mode == "lesson":
-        new = 1
-    else:
-        new = next_stage(stage, meaning_wrong, reading_wrong)
+    new = outcome(mode, stage, meaning_wrong, reading_wrong)
+    keep_clock = mode == "ahead" and new == stage
     db.execute(
         """
         update course_items
         set srs_stage = %s,
             started_at = coalesce(started_at, %s),
-            available_at = %s,
+            available_at = case when %s then available_at else %s end,
             passed_at = case when %s >= %s then coalesce(passed_at, %s) else passed_at end,
             burned_at = case when %s >= %s then %s else null end,
             meaning_ok = false, reading_ok = false,
             meaning_wrong = 0, reading_wrong = 0,
-            review_count = review_count + %s,
+            review_count = review_count + 1,
             wrong_count = wrong_count + %s
         where subject_id = %s
         """,
         [
-            new, now, next_available(new, level, now),
+            new, now,
+            keep_clock, next_available(new, now),
             new, GURU, now,
             new, BURNED, now,
-            1 if mode == "review" else 0,
-            1 if mode == "review" and (meaning_wrong + reading_wrong) else 0,
+            1 if (meaning_wrong + reading_wrong) else 0,
             subject_id,
         ],
     )
     payload.update({
-        "previous_stage": stage,
         "stage": new,
         "stage_name": SRS_NAMES.get(new),
-        "next_review_at": _iso(next_available(new, level, now)),
+        "clean": (meaning_wrong + reading_wrong) == 0,
+        "next_review_at": None if keep_clock else _iso(next_available(new, now)),
     })
     if new >= GURU > stage:
-        unlocked = _run_unlocks(db, now)
-        if unlocked:
-            stubs = db.execute(
-                "select id, object_type, characters, primary_meaning from wk_subjects where id = any(%s)",
-                [unlocked],
-                fetch=True,
-            )
-            payload["unlocked"] = [
-                {"subject_id": sid, "type": t, "characters": c, "meaning": m}
-                for sid, t, c, m in stubs
-            ]
         payload["level_passed"] = _check_pass(db, level, now)
     return _with_reveal(db, payload, subject_id)
 

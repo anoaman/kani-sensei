@@ -9,9 +9,8 @@ const GROUPS = [
 ];
 
 const BUCKET_LABEL = {
-  locked: "Locked",
-  lesson: "In lessons",
-  apprentice: "Apprentice",
+  unchecked: "Unchecked",
+  relearn: "Relearn",
   guru: "Guru",
   master: "Master",
   enlightened: "Enlightened",
@@ -88,7 +87,7 @@ export function LevelIndex({ go }) {
               </span>
               <span className="level-status">
                 {level.passed ? "Passed" : level.started
-                  ? `${level.kanji_guru}/${level.kanji_needed} kanji · ${level.reviews ? `${level.reviews} due` : `${level.lessons} lessons`}`
+                  ? `${level.known}/${level.total} back${level.reviews ? ` · ${level.reviews} due` : level.relearn ? ` · ${level.relearn} relearn` : level.check ? ` · ${level.check} to check` : ""}`
                   : "Not started"}
               </span>
             </button>
@@ -99,47 +98,53 @@ export function LevelIndex({ go }) {
   );
 }
 
+const MODE_BUTTONS = [
+  ["check", "Check"],
+  ["relearn", "Relearn"],
+  ["reviews", "Reviews"],
+  ["ahead", "Study ahead"],
+];
+
 function CourseBox({ level, course, onStart, busy, go }) {
   if (!course.started) {
     return (
       <div className="course-box">
         <div>
-          <p className="kicker">Course</p>
-          <h3>Restart level {level} from zero.</h3>
+          <p className="kicker">Comeback course</p>
+          <h3>Start level {level} from where your memory is.</h3>
           <p className="muted">
-            Radicals first. Kanji unlock when their radicals reach Guru, vocabulary when its kanji do.
-            Lessons in fives, reviews on WaniKani timing. Pass at 90% of kanji on Guru.
+            First a quick check of every item. What you still know goes straight to Guru; what slipped goes to Relearn,
+            which you can grind any time. Only the long gaps run on real time. Pass at 90% of kanji on Guru.
           </p>
         </div>
         <button className="go-btn" onClick={onStart} disabled={busy}>{busy ? "Setting up…" : `Start level ${level}`}</button>
       </div>
     );
   }
-  const pct = course.kanji_needed ? Math.min(100, (course.kanji_guru / course.kanji_needed) * 100) : 0;
+  const pct = course.total ? Math.min(100, (course.known / course.total) * 100) : 0;
   const next = whenLabel(course.next_review_at);
   return (
     <div className="course-box">
       <div className="course-progress">
-        <p className="kicker">{course.passed_at ? "Level passed" : "Course progress"}</p>
-        <strong>{course.kanji_guru}<small>/ {course.kanji_needed} kanji on Guru to pass</small></strong>
+        <p className="kicker">{course.passed_at ? "Level passed" : "Comeback progress"}</p>
+        <strong>{course.known}<small>/ {course.total} items back on Guru+</small></strong>
         <span className="side-bar"><i style={{ width: `${pct}%` }} /></span>
         <p className="muted">
-          {Object.entries(course.buckets || {})
-            .filter(([, n]) => n)
-            .map(([bucket, n]) => `${n} ${BUCKET_LABEL[bucket]?.toLowerCase() || bucket}`)
-            .join(" · ")}
+          {course.kanji_guru}/{course.kanji_needed} kanji to pass
+          {next ? ` · next real-time review ${next}` : ""}
         </p>
       </div>
       <div className="course-actions">
-        <button className="go-btn" disabled={!course.lessons} onClick={() => go(`/level/${level}/lessons`)}>
-          Lessons <b className="count">{course.lessons}</b>
+        <button className="go-btn wide-btn" disabled={!course.next_mode} onClick={() => go(`/level/${level}/${course.next_mode}`)}>
+          {course.next_mode ? `Continue · ${MODE_BUTTONS.find(([id]) => id === course.next_mode)[1]}` : "All caught up"}
         </button>
-        <button className="go-btn" disabled={!course.reviews} onClick={() => go(`/level/${level}/reviews`)}>
-          Reviews <b className="count">{course.reviews}</b>
-        </button>
-        <p className="muted">
-          {course.reviews ? "Reviews are waiting." : next ? `Next review ${next}.` : course.lessons ? "Do lessons to start the clock." : "Nothing scheduled."}
-        </p>
+        <div className="mode-row">
+          {MODE_BUTTONS.map(([id, label]) => (
+            <button key={id} className="mode-btn" disabled={!course[id]} onClick={() => go(`/level/${level}/${id}`)}>
+              <span>{label}</span><b>{course[id] || 0}</b>
+            </button>
+          ))}
+        </div>
         <button className="quiet-link" onClick={onStart} disabled={busy}>Restart this level</button>
       </div>
     </div>

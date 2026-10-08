@@ -6,6 +6,20 @@ import { Glyph } from "./LevelPages.jsx";
 
 const TYPE_LABEL = { radical: "Radical", kanji: "Kanji", vocabulary: "Vocabulary", kana_vocabulary: "Vocabulary" };
 const RETRY_GAP = 3;
+const RELEARN_GAP = 4;
+// Relearn walks an item up to Guru in one sitting, a few passes at most.
+const MAX_PASSES = 5;
+
+export const MODE_INFO = {
+  check: { title: "Check", verb: "Check", note: "One look per item. Clean answers go straight to Guru; misses go to Relearn." },
+  relearn: { title: "Relearn", verb: "Relearn", note: "No waiting. Clean passes climb a stage; items come back until they're on Guru." },
+  reviews: { title: "Reviews", verb: "Review", note: "Due on real time. This is where it sticks or slips." },
+  ahead: { title: "Study ahead", verb: "Study ahead", note: "Early practice. Right answers don't move items up; misses still count." },
+};
+
+function promptsFor(entry) {
+  return (entry.prompts || ["meaning"]).map((prompt_type) => ({ subject_id: entry.subject_id, prompt_type }));
+}
 
 function shuffle(list) {
   const out = [...list];
@@ -43,7 +57,7 @@ function LessonCard({ card, index, total }) {
   return (
     <div className="lesson-card">
       <div className={`prompt-band t-${type}`}>
-        <span>{TYPE_LABEL[type]} · lesson {index + 1} of {total}</span>
+        <span>{TYPE_LABEL[type]} · relearn {index + 1} of {total}</span>
       </div>
       <div className="lesson-glyph"><Glyph item={card} className="chars" /></div>
       <div className="lesson-facts">
@@ -100,8 +114,8 @@ export default function CourseSession({ level, mode, go, onFocus }) {
   const [details, setDetails] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [stats, setStats] = useState({ answered: 0, correct: 0, done: [], unlocked: [], passed: false });
-  const [moreLessons, setMoreLessons] = useState(0);
+  const [stats, setStats] = useState({ answered: 0, correct: 0, done: [], passed: false });
+  const [passes, setPasses] = useState({});
   const composing = useRef(false);
   const inputRef = useRef(null);
 
@@ -118,27 +132,19 @@ export default function CourseSession({ level, mode, go, onFocus }) {
   async function load() {
     setPhase("loading");
     setError("");
-    setStats({ answered: 0, correct: 0, done: [], unlocked: [], passed: false });
+    setStats({ answered: 0, correct: 0, done: [], passed: false });
     setFeedback(null);
+    setPasses({});
     try {
-      if (mode === "lessons") {
-        const data = await api.courseLessons(level);
-        const lessons = data.lessons || [];
-        setCards(lessons);
-        setCardIndex(0);
-        setItems(Object.fromEntries(lessons.map((card) => [card.subject_id, card])));
-        setQueue(shuffle(lessons.flatMap((card) => [
-          { subject_id: card.subject_id, prompt_type: "meaning" },
-          ...(card.needs_reading ? [{ subject_id: card.subject_id, prompt_type: "reading" }] : []),
-        ])));
-        setPhase(lessons.length ? "learn" : "empty");
-      } else {
-        const data = await api.courseReviews(level);
-        const reviews = data.reviews || [];
-        setItems(Object.fromEntries(reviews.map((review) => [review.subject_id, review])));
-        setQueue(shuffle(reviews.flatMap((review) => review.prompts.map((prompt_type) => ({ subject_id: review.subject_id, prompt_type })))));
-        setPhase(reviews.length ? "quiz" : "empty");
-      }
+      const data = await api.courseQueue(level, mode);
+      const list = data.items || [];
+      setItems(Object.fromEntries(list.map((entry) => [entry.subject_id, entry])));
+      setQueue(shuffle(list.flatMap(promptsFor)));
+      // Fresh relearns open with their teaching cards.
+      const fresh = list.filter((entry) => entry.card).map((entry) => ({ ...entry.card, needs_reading: entry.needs_reading }));
+      setCards(fresh);
+      setCardIndex(0);
+      setPhase(!list.length ? "empty" : fresh.length ? "learn" : "quiz");
     } catch (err) {
       setError(err.message || "Could not load");
       setPhase("empty");
@@ -176,16 +182,21 @@ export default function CourseSession({ level, mode, go, onFocus }) {
         return;
       }
       setHint("");
-      setDetails(false);
+      // A missed check is the moment to see the card, so open it.
+      setDetails(!result.correct && mode === "check");
       setFeedback(result);
       if (!result.correct) bump();
-      setStats((prev) => ({
-        answered: prev.answered + 1,
-        correct: prev.correct + (result.correct ? 1 : 0),
-        done: result.item_done ? [...prev.done, { ...items[current.subject_id], ...result }] : prev.done,
-        unlocked: [...prev.unlocked, ...(result.unlocked || [])],
-        passed: prev.passed || result.level_passed,
-      }));
+      setStats((prev) => {
+        const done = result.item_done
+          ? [...prev.done.filter((entry) => entry.subject_id !== result.subject_id), { ...items[current.subject_id], ...result }]
+          : prev.done;
+        return {
+          answered: prev.answered + 1,
+          correct: prev.correct + (result.correct ? 1 : 0),
+          done,
+          passed: prev.passed || result.level_passed,
+        };
+      });
     } catch (err) {
       setError(err.message || "Could not grade");
     } finally {
@@ -193,27 +204,32 @@ export default function CourseSession({ level, mode, go, onFocus }) {
     }
   }
 
-  async function next() {
+  function next() {
     if (!feedback) return;
-    const missed = !feedback.correct;
+    const result = feedback;
     setFeedback(null);
     setTyped("");
     setDetails(false);
-    const rest = queue.slice(1);
-    // A miss comes back a few questions later until it's right.
-    if (missed) rest.splice(Math.min(rest.length, RETRY_GAP), 0, current);
-    setQueue(rest);
-    if (!rest.length) {
-      setPhase("done");
-      if (mode === "lessons") {
-        try {
-          const more = await api.courseLessons(level);
-          setMoreLessons(more.lessons?.length || 0);
-        } catch {
-          setMoreLessons(0);
-        }
+    let rest = queue.slice(1);
+    if (!result.correct && mode !== "check") {
+      // The half stays open until it's right: bring it back in a few.
+      rest.splice(Math.min(rest.length, RETRY_GAP), 0, current);
+    }
+    if (result.item_done && mode === "relearn" && result.stage < 5) {
+      const count = (passes[result.subject_id] || 0) + 1;
+      setPasses({ ...passes, [result.subject_id]: count });
+      if (count < MAX_PASSES) {
+        const entry = items[result.subject_id];
+        const again = promptsFor({ ...entry, prompts: entry.needs_reading ? ["meaning", "reading"] : ["meaning"] });
+        const at = Math.min(rest.length, RELEARN_GAP);
+        rest = [...rest.slice(0, at), ...again, ...rest.slice(at)];
       }
     }
+    if (result.item_done) {
+      setItems((prev) => ({ ...prev, [result.subject_id]: { ...prev[result.subject_id], stage: result.stage, stage_name: result.stage_name } }));
+    }
+    setQueue(rest);
+    if (!rest.length) setPhase("done");
   }
 
   useEffect(() => {
@@ -238,7 +254,8 @@ export default function CourseSession({ level, mode, go, onFocus }) {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const title = mode === "lessons" ? `Level ${level} lessons` : `Level ${level} reviews`;
+  const info = MODE_INFO[mode] || MODE_INFO.check;
+  const title = `Level ${level} · ${info.title}`;
   const remaining = new Set(queue.map((q) => q.subject_id)).size;
 
   return (
@@ -256,7 +273,7 @@ export default function CourseSession({ level, mode, go, onFocus }) {
 
       {phase === "empty" ? (
         <div className="surface">
-          <p>{mode === "lessons" ? "No lessons waiting on this level." : "No reviews due right now."}</p>
+          <p>Nothing in {info.title.toLowerCase()} on this level right now.</p>
           <button className="primary-btn" onClick={() => go(`/level/${level}`)}>Back to level {level}</button>
         </div>
       ) : null}
@@ -277,7 +294,7 @@ export default function CourseSession({ level, mode, go, onFocus }) {
               ? <button className="primary-btn" onClick={() => setCardIndex(cardIndex + 1)}>Next →</button>
               : <button className="primary-btn" onClick={() => setPhase("quiz")}>Quiz me</button>}
           </div>
-          <p className="note">← → to move · Enter on the last card starts the quiz</p>
+          <p className="note">These slipped. Read them, then prove it · ← → to move · Enter on the last card starts</p>
         </div>
       ) : null}
 
@@ -285,7 +302,7 @@ export default function CourseSession({ level, mode, go, onFocus }) {
         <div className={`quiz-stage surface ${shake ? "shake" : ""}`}>
           <div className={`prompt-band t-${type}${isReading ? " reading" : ""}`}>
             <span>{TYPE_LABEL[type]} <b>{isReading ? "Reading" : "Meaning"}</b></span>
-            {mode === "reviews" && item.stage_name ? <span className="band-meta">{item.stage_name}</span> : null}
+            {item.stage_name ? <span className="band-meta">{item.stage_name}</span> : null}
           </div>
           <div className="prompt"><Glyph item={item} className="chars" /></div>
 
@@ -329,16 +346,16 @@ export default function CourseSession({ level, mode, go, onFocus }) {
                 : (feedback.inspect?.meanings || []).join(", ")}
               {feedback.submitted && (!feedback.correct || feedback.almost) ? <div className="meta">You said {feedback.submitted}</div> : null}
               {!feedback.correct ? (
-                <div className="meta">{mode === "lessons" ? "It comes back in a few. Lessons don't cost you anything." : "It comes back in a few. This miss counts against the item."}</div>
-              ) : null}
-              {feedback.item_done && feedback.stage_name ? (
-                <div className={`stage-change ${feedback.stage < (feedback.previous_stage ?? 0) ? "down" : "up"}`}>
-                  {mode === "lessons" ? "Learned →" : `${feedback.stage < feedback.previous_stage ? "↓" : "↑"}`} {feedback.stage_name}
+                <div className="meta">
+                  {mode === "check" ? "Into Relearn it goes. Here's the card." : "It comes back in a few. This miss counts."}
                 </div>
               ) : null}
-              {feedback.unlocked?.length ? (
-                <div className="unlock-note">
-                  Unlocked: <span lang="ja">{feedback.unlocked.map((u) => u.characters || u.meaning).join(" ")}</span>
+              {feedback.item_done && feedback.stage_name ? (
+                <div className={`stage-change ${feedback.stage < feedback.previous_stage ? "down" : feedback.stage === feedback.previous_stage ? "" : "up"}`}>
+                  {feedback.stage === feedback.previous_stage
+                    ? `Held at ${feedback.stage_name}`
+                    : `${feedback.stage < feedback.previous_stage ? "↓" : "↑"} ${feedback.stage_name}`}
+                  {feedback.stage >= 5 && feedback.next_review_at ? ` · next review ${new Date(feedback.next_review_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : ""}
                 </div>
               ) : null}
               {feedback.level_passed ? <div className="unlock-note">Level {level} passed.</div> : null}
@@ -354,27 +371,22 @@ export default function CourseSession({ level, mode, go, onFocus }) {
 
       {phase === "done" ? (
         <div className="quiz-stage surface">
-          <p className="kicker">{mode === "lessons" ? "Lessons done" : "Reviews done"}</p>
+          <p className="kicker">{info.title} done</p>
           <h3>
-            {mode === "lessons"
-              ? `${stats.done.length} new items are on Apprentice 1.`
-              : `${stats.done.length} items reviewed · ${stats.answered ? Math.round((stats.correct / stats.answered) * 100) : 0}% first answers right.`}
+            {stats.done.length} items · {stats.answered ? Math.round((stats.correct / stats.answered) * 100) : 0}% of answers right.
           </h3>
-          {mode === "reviews" ? (
-            <div className="glyph-row">
-              {stats.done.map((done) => (
-                <span key={done.subject_id} className={`glyph-chip ${done.stage < done.previous_stage ? "down" : "up"}`}>
-                  <span className="glyph" lang="ja">{done.characters || "・"}</span>
-                  <span className="meta">{done.stage_name}</span>
-                </span>
-              ))}
-            </div>
-          ) : null}
-          {stats.unlocked.length ? <p className="unlock-note">Unlocked {stats.unlocked.length}: <span lang="ja">{stats.unlocked.map((u) => u.characters || u.meaning).join(" ")}</span></p> : null}
+          <div className="glyph-row">
+            {stats.done.map((done) => (
+              <span key={done.subject_id} className={`glyph-chip ${done.stage < done.previous_stage || (mode === "check" && done.stage < 5) ? "down" : "up"}`}>
+                <span className="glyph" lang="ja">{done.characters || "・"}</span>
+                <span className="meta">{done.stage_name}</span>
+              </span>
+            ))}
+          </div>
           {stats.passed ? <p className="unlock-note">Level {level} passed.</p> : null}
           <div className="reveal-actions">
-            {mode === "lessons" && moreLessons ? <button className="primary-btn" onClick={load}>Next {moreLessons} lessons</button> : null}
-            <button className={mode === "lessons" && moreLessons ? "ghost-btn" : "primary-btn"} onClick={() => go(`/level/${level}`)}>Back to level {level}</button>
+            <button className="primary-btn" onClick={() => go(`/level/${level}/continue`)}>Keep going</button>
+            <button className="ghost-btn" onClick={() => go(`/level/${level}`)}>Back to level {level}</button>
           </div>
         </div>
       ) : null}

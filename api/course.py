@@ -2,8 +2,8 @@
 
 GET  /api/course?action=levels            level index with course status
 GET  /api/course?level=N                  level page: items by type + course summary
-GET  /api/course?action=lessons&level=N   next lesson batch (teaching cards)
-GET  /api/course?action=reviews[&level=N] due review items
+GET  /api/course?action=queue&level=N&mode=check|relearn|reviews|ahead
+GET  /api/course?action=sky               every item as a dot, for the home map
 POST /api/course?action=start   {level}                     start/restart a level
 POST /api/course?action=answer  {subject_id, prompt_type, text | gave_up}
 """
@@ -17,10 +17,10 @@ from shared.auth import query_params
 from shared.cache import clear as clear_cache
 from shared.course import (
     answer,
-    fetch_lessons,
     fetch_level,
     fetch_levels,
-    fetch_reviews,
+    fetch_queue,
+    fetch_sky,
     jsonable,
     start_level,
 )
@@ -54,10 +54,11 @@ class handler(BaseHTTPRequestHandler):
             with db.reuse():
                 if action == "levels":
                     body = fetch_levels(db)
-                elif action == "lessons":
-                    body = fetch_lessons(db, _level(level))
-                elif action == "reviews":
-                    body = fetch_reviews(db, _level(level) if level else None)
+                elif action == "queue":
+                    mode = (query.get("mode", [""])[0] or "").lower()
+                    body = fetch_queue(db, _level(level), mode)
+                elif action == "sky":
+                    body = fetch_sky(db)
                 else:
                     if level is None:
                         raise ValueError("level is required")
