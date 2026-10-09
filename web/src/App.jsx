@@ -40,6 +40,7 @@ function viewFromPath(pathname) {
   if (pathname.startsWith("/session") || pathname.startsWith("/drill")) return "session";
   if (pathname.startsWith("/levels")) return "levels";
   if (pathname.startsWith("/today")) return "today";
+  if (pathname.startsWith("/gate")) return "gate";
   const match = pathname.match(/^\/level\/(\d+)(?:\/(check|relearn|reviews|ahead|continue))?/);
   if (match) return match[2] ? (match[2] === "continue" ? "continue" : "course") : "level";
   return "dojo";
@@ -225,6 +226,7 @@ export default function App() {
       {view === "course" ? (
         <CourseSession key={pathname} level={levelFromPath(pathname)} mode={pathname.split("/")[3]} go={navigate} onFocus={setFocus} />
       ) : null}
+      {view === "gate" ? <CourseSession key={pathname} gate go={navigate} onFocus={setFocus} /> : null}
       {view === "today" ? <CourseSession key={pathname} daily go={navigate} onFocus={setFocus} /> : null}
       {view === "continue" ? <ContinueRoute key={pathname} level={levelFromPath(pathname)} go={navigate} /> : null}
       {customize && !focus ? <Customize data={data} navigate={navigate} onClose={() => setCustomize(false)} /> : null}

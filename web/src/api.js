@@ -50,6 +50,10 @@ export const api = {
   courseQueue: (level, mode) =>
     request(`/api/course?action=queue&level=${encodeURIComponent(level)}&mode=${encodeURIComponent(mode)}`),
   sky: () => request("/api/course?action=sky"),
+  gateStatus: () => request("/api/gate"),
+  gateStart: () => request("/api/gate?action=start", { method: "POST", body: "{}" }),
+  gateFinish: (gateId) =>
+    request("/api/gate?action=finish", { method: "POST", body: JSON.stringify({ gate_id: gateId }) }),
   daily: (summary = false) => request(`/api/course?action=daily${summary ? "&summary=1" : ""}`),
   courseAnswer: (body) =>
     request("/api/course?action=answer", { method: "POST", body: JSON.stringify(body) }),
