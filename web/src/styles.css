@@ -447,3 +447,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .quiz-stage .choice { min-height: 64px; font-size: 17px; }
   .kanji-field .field-credit { bottom: auto; top: 0; }
 }
+.daily-done { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0 14px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; font-size: 14px; color: var(--ink-soft); }
+.daily-done b { color: var(--ink); }
+.streak { color: var(--ver); font-weight: 600; }

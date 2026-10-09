@@ -268,6 +268,7 @@ function Sky({ sky, levels, go }) {
 export default function Home({ go }) {
   const [levels, setLevels] = useState(null);
   const [sky, setSky] = useState(null);
+  const [today, setToday] = useState(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -277,6 +278,7 @@ export default function Home({ go }) {
         setSky(skyData.levels);
       })
       .catch((err) => setError(err.message || "Could not load"));
+    api.daily(true).then(setToday).catch(() => setToday(null));
   }, []);
 
   if (error) return <div className="error global-error">{error}</div>;
@@ -298,7 +300,23 @@ export default function Home({ go }) {
               ? <>You've brought back <b>{known.toLocaleString()}</b> of {total.toLocaleString()} items across {startedCount} {startedCount === 1 ? "level" : "levels"}.</>
               : <>{total.toLocaleString()} items from levels 1–{levels.length} are still in there somewhere. Let's find out how many.</>}
           </p>
-          {next ? (
+          {today?.total && !today.completed ? (
+            <div className="home-next">
+              <button className="go-btn" onClick={() => go("/today")}>
+                {today.done ? "Finish today's set" : "Start today's set"}
+              </button>
+              <span>
+                <b>{today.done}/{today.total}</b> done
+                {today.streak ? <> · <span className="streak">{today.streak}-day streak</span> on the line</> : " · day one of the streak"}
+              </span>
+            </div>
+          ) : null}
+          {today?.completed ? (
+            <p className="daily-done">
+              Today's set ✓ · <span className="streak">{today.streak}-day streak</span>
+            </p>
+          ) : null}
+          {next && !(today?.total && !today.completed) ? (
             <div className="home-next">
               <button
                 className="go-btn"

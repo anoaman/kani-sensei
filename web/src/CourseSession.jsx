@@ -103,7 +103,7 @@ function LessonCard({ card, index, total }) {
   );
 }
 
-export default function CourseSession({ level, mode, go, onFocus }) {
+export default function CourseSession({ level, mode, daily = false, go, onFocus }) {
   const [phase, setPhase] = useState("loading");
   const [items, setItems] = useState({});
   const [cards, setCards] = useState([]);
@@ -118,6 +118,7 @@ export default function CourseSession({ level, mode, go, onFocus }) {
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ answered: 0, correct: 0, done: [], passed: false });
   const [passes, setPasses] = useState({});
+  const [today, setToday] = useState(null); // daily: { done, total, streak, completed }
   const composing = useRef(false);
   const inputRef = useRef(null);
 
@@ -138,22 +139,23 @@ export default function CourseSession({ level, mode, go, onFocus }) {
     setFeedback(null);
     setPasses({});
     try {
-      const data = await api.courseQueue(level, mode);
+      const data = daily ? await api.daily() : await api.courseQueue(level, mode);
       const list = data.items || [];
+      if (daily) setToday({ done: data.done, total: data.total, streak: data.streak, completed: data.completed });
       setItems(Object.fromEntries(list.map((entry) => [entry.subject_id, entry])));
       setQueue(shuffle(list.flatMap(promptsFor)));
       // Fresh relearns open with their teaching cards.
       const fresh = list.filter((entry) => entry.card).map((entry) => ({ ...entry.card, needs_reading: entry.needs_reading }));
       setCards(fresh);
       setCardIndex(0);
-      setPhase(!list.length ? "empty" : fresh.length ? "learn" : "quiz");
+      setPhase(!list.length ? (daily && data.total ? "done" : "empty") : fresh.length ? "learn" : "quiz");
     } catch (err) {
       setError(err.message || "Could not load");
       setPhase("empty");
     }
   }
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [level, mode]);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [level, mode, daily]);
 
   useEffect(() => {
     if (phase === "quiz" && !feedback && inputRef.current) inputRef.current.focus();
@@ -185,7 +187,8 @@ export default function CourseSession({ level, mode, go, onFocus }) {
       }
       setHint("");
       // A missed check is the moment to see the card, so open it.
-      setDetails(!result.correct && mode === "check");
+      setDetails(!result.correct && result.mode === "check");
+      if (result.daily) setToday((prev) => ({ ...prev, ...result.daily, streak: result.daily.streak ?? prev?.streak }));
       setFeedback(result);
       if (!result.correct) bump();
       setStats((prev) => {
@@ -213,11 +216,11 @@ export default function CourseSession({ level, mode, go, onFocus }) {
     setTyped("");
     setDetails(false);
     let rest = queue.slice(1);
-    if (!result.correct && mode !== "check") {
+    if (!result.correct && result.mode !== "check") {
       // The half stays open until it's right: bring it back in a few.
       rest.splice(Math.min(rest.length, RETRY_GAP), 0, current);
     }
-    if (result.item_done && mode === "relearn" && result.stage < 5) {
+    if (result.item_done && result.mode === "relearn" && result.stage < 5) {
       const count = (passes[result.subject_id] || 0) + 1;
       setPasses({ ...passes, [result.subject_id]: count });
       if (count < MAX_PASSES) {
@@ -256,18 +259,24 @@ export default function CourseSession({ level, mode, go, onFocus }) {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const info = MODE_INFO[mode] || MODE_INFO.check;
-  const title = `Level ${level} · ${info.title}`;
+  const info = daily ? { title: "Today's set" } : MODE_INFO[mode] || MODE_INFO.check;
+  const title = daily ? "Today's set" : `Level ${level} · ${info.title}`;
+  const backTo = daily ? "dojo" : `/level/${level}`;
   const remaining = new Set(queue.map((q) => q.subject_id)).size;
 
   return (
     <section className="panel focus-panel">
       <div className="section-head level-head">
         <div>
-          <button className="quiet-link" onClick={() => go(`/level/${level}`)}>← Level {level}</button>
+          <button className="quiet-link" onClick={() => go(backTo)}>{daily ? "← Home" : `← Level ${level}`}</button>
           <h2>{title}</h2>
         </div>
-        {phase === "quiz" ? <p className="muted">{remaining} items left · {stats.correct}/{stats.answered} correct</p> : null}
+        {phase === "quiz" ? (
+          <p className="muted">
+            {daily && today ? <><b>{today.done}/{today.total}</b> today · </> : null}
+            {remaining} items left · {stats.correct}/{stats.answered} correct
+          </p>
+        ) : null}
       </div>
       {error ? <div className="error">{error}</div> : null}
 
@@ -275,8 +284,8 @@ export default function CourseSession({ level, mode, go, onFocus }) {
 
       {phase === "empty" ? (
         <div className="surface">
-          <p>Nothing in {info.title.toLowerCase()} on this level right now.</p>
-          <button className="primary-btn" onClick={() => go(`/level/${level}`)}>Back to level {level}</button>
+          <p>{daily ? "Nothing to build today's set from yet. Start a level and it fills itself." : `Nothing in ${info.title.toLowerCase()} on this level right now.`}</p>
+          <button className="primary-btn" onClick={() => go(daily ? "/levels" : `/level/${level}`)}>{daily ? "Pick a level" : `Back to level ${level}`}</button>
         </div>
       ) : null}
 
@@ -349,12 +358,12 @@ export default function CourseSession({ level, mode, go, onFocus }) {
               {feedback.submitted && (!feedback.correct || feedback.almost) ? <div className="meta">You said {feedback.submitted}</div> : null}
               {!feedback.correct ? (
                 <div className="meta">
-                  {mode === "check" ? "Into Relearn it goes. Here's the card." : "It comes back in a few. This miss counts."}
+                  {feedback.mode === "check" ? "Into Relearn it goes. Here's the card." : "It comes back in a few. This miss counts."}
                 </div>
               ) : null}
               {feedback.item_done && feedback.stage_name ? (
-                <div className={`stage-change ${feedback.stage < feedback.previous_stage || (mode === "check" && feedback.stage < 5) ? "down" : feedback.stage === feedback.previous_stage ? "" : "up"}`}>
-                  {mode === "check" && feedback.stage < 5
+                <div className={`stage-change ${feedback.stage < feedback.previous_stage || (feedback.mode === "check" && feedback.stage < 5) ? "down" : feedback.stage === feedback.previous_stage ? "" : "up"}`}>
+                  {feedback.mode === "check" && feedback.stage < 5
                     ? `→ ${feedback.stage_name}`
                     : feedback.stage === feedback.previous_stage
                       ? `Held at ${feedback.stage_name}`
@@ -376,12 +385,17 @@ export default function CourseSession({ level, mode, go, onFocus }) {
       {phase === "done" ? (
         <div className="quiz-stage surface">
           <p className="kicker">{info.title} done</p>
-          <h3>
+          {daily && today ? (
+            <p className="daily-done">
+              <b>{today.total}/{today.total}</b> today · <span className="streak">{today.streak || 1}-day streak</span>
+            </p>
+          ) : null}
+          {daily && !stats.answered ? <h3>Already done today. Same time tomorrow.</h3> : <h3>
             {stats.done.length} items · {stats.answered ? Math.round((stats.correct / stats.answered) * 100) : 0}% of answers right.
-          </h3>
+          </h3>}
           <div className="glyph-row">
             {stats.done.map((done) => (
-              <span key={done.subject_id} className={`glyph-chip ${done.stage < done.previous_stage || (mode === "check" && done.stage < 5) ? "down" : "up"}`}>
+              <span key={done.subject_id} className={`glyph-chip ${done.stage < done.previous_stage || (done.mode === "check" && done.stage < 5) ? "down" : "up"}`}>
                 <span className="glyph" lang="ja">{done.characters || "・"}</span>
                 <span className="meta">{done.stage_name}</span>
               </span>
@@ -389,8 +403,14 @@ export default function CourseSession({ level, mode, go, onFocus }) {
           </div>
           {stats.passed ? <p className="unlock-note">Level {level} passed.</p> : null}
           <div className="reveal-actions">
-            <button className="primary-btn" onClick={() => go(`/level/${level}/continue`)}>Keep going</button>
-            <button className="ghost-btn" onClick={() => go(`/level/${level}`)}>Back to level {level}</button>
+            {daily ? (
+              <button className="primary-btn" onClick={() => go("dojo")}>Home</button>
+            ) : (
+              <>
+                <button className="primary-btn" onClick={() => go(`/level/${level}/continue`)}>Keep going</button>
+                <button className="ghost-btn" onClick={() => go(`/level/${level}`)}>Back to level {level}</button>
+              </>
+            )}
           </div>
         </div>
       ) : null}

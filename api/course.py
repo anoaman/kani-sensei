@@ -3,6 +3,7 @@
 GET  /api/course?action=levels            level index with course status
 GET  /api/course?level=N                  level page: items by type + course summary
 GET  /api/course?action=queue&level=N&mode=check|relearn|reviews|ahead
+GET  /api/course?action=daily[&summary=1] today's set: remaining items, progress, streak
 GET  /api/course?action=sky               every item as a dot, for the home map
 POST /api/course?action=start   {level}                     start/restart a level
 POST /api/course?action=answer  {subject_id, prompt_type, text | gave_up}
@@ -25,6 +26,7 @@ from shared.course import (
     start_level,
 )
 from shared.auth import read_json_body
+from shared.daily import fetch_daily
 from shared.http_util import optional_int, respond
 from shared.neon import NeonClient
 
@@ -57,6 +59,9 @@ class handler(BaseHTTPRequestHandler):
                 elif action == "queue":
                     mode = (query.get("mode", [""])[0] or "").lower()
                     body = fetch_queue(db, _level(level), mode)
+                elif action == "daily":
+                    summary = (query.get("summary", [""])[0] or "") in ("1", "true")
+                    body = fetch_daily(db, with_items=not summary)
                 elif action == "sky":
                     body = fetch_sky(db)
                 else:

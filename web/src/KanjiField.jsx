@@ -4,8 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // order, on a practice-paper grid. Holds, fades like drying ink, next one.
 // Stroke data: KanjiVG (CC BY-SA 3.0), fetched per glyph and cached.
 
-const HOLD_MS = 3200;
-const FADE_MS = 700;
+const HOLD_MS = 2400;
+const FADE_MS = 450;
 const VIEW = 109; // KanjiVG coordinate space
 const STATE_WORD = { 0: "to check", 1: "relearning", 2: "relearning", 3: "relearning", 4: "relearning" };
 const KANJIVG = "https://cdn.jsdelivr.net/gh/KanjiVG/kanjivg@master/kanji/";
@@ -142,11 +142,11 @@ export default function KanjiField({ sky, onOpenLevel }) {
 
     // Long sweeps take longer; short dots are a quick press. Gap = brush lift.
     const timeline = [];
-    let cursor = 150;
+    let cursor = 80;
     for (const stroke of plan) {
-      const duration = 180 + stroke.length * 7;
+      const duration = 70 + stroke.length * 2.6;
       timeline.push({ start: cursor, duration });
-      cursor += duration + 110;
+      cursor += duration + 40;
     }
     const total = cursor;
 

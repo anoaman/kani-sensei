@@ -429,6 +429,12 @@ _QUEUE_FILTERS = {
 }
 
 
+QUEUE_COLUMNS = """
+    c.subject_id, c.level, s.object_type, s.characters, s.primary_meaning,
+    s.readings, s.raw, c.srs_stage, c.meaning_ok, c.reading_ok, c.available_at
+"""
+
+
 def fetch_queue(db, level, mode, limit=BATCH):
     """Next items for a mode. Relearn items on Apprentice 1 carry a teaching card."""
     ensure_schema(db)
@@ -437,8 +443,7 @@ def fetch_queue(db, level, mode, limit=BATCH):
     where, order = _QUEUE_FILTERS[mode]
     rows = db.execute(
         f"""
-        select c.subject_id, c.level, s.object_type, s.characters, s.primary_meaning,
-               s.readings, s.raw, c.srs_stage, c.meaning_ok, c.reading_ok
+        select {QUEUE_COLUMNS}
         from course_items c
         join wk_subjects s on s.id = c.subject_id
         where c.level = %s and {where}
@@ -448,37 +453,42 @@ def fetch_queue(db, level, mode, limit=BATCH):
         [level, limit],
         fetch=True,
     )
-    items = []
-    for (sid, item_level, object_type, characters, meaning, readings_raw, raw,
-         stage, meaning_ok, reading_ok) in rows:
-        raw = _parse_json(raw) if not isinstance(raw, dict) else raw
-        reading = needs_reading(object_type, _accepted_readings(readings_raw))
-        prompts = []
-        if not meaning_ok:
-            prompts.append("meaning")
-        if reading and not reading_ok:
-            prompts.append("reading")
-        item = {
-            "subject_id": sid,
-            "level": item_level,
-            "type": "vocabulary" if object_type == "kana_vocabulary" else object_type,
-            "characters": characters,
-            "image_url": None if characters else image_url(raw),
-            "stage": stage,
-            "stage_name": stage_name(stage),
-            "needs_reading": reading,
-            "prompts": prompts or (["meaning", "reading"] if reading else ["meaning"]),
-        }
-        # Fresh off a miss (back on the floor): open with the teaching card.
-        if mode == "relearn" and stage == RELEARN_FLOOR:
-            try:
-                item["card"] = fetch_inspect(db, sid)
-                # The card's SRS label is the old WaniKani snapshot; the course has its own.
-                item["card"].update({"image_url": item["image_url"], "needs_reading": reading, "srs_name": None})
-            except Exception:
-                pass
-        items.append(item)
-    return {"level": level, "mode": mode, "items": items}
+    return {"level": level, "mode": mode, "items": [queue_item(db, row) for row in rows]}
+
+
+def queue_item(db, row, now=None):
+    """One QUEUE_COLUMNS row as a session item, tagged with its current mode."""
+    (sid, item_level, object_type, characters, meaning, readings_raw, raw,
+     stage, meaning_ok, reading_ok, available_at) = row
+    raw = _parse_json(raw) if not isinstance(raw, dict) else raw
+    reading = needs_reading(object_type, _accepted_readings(readings_raw))
+    mode = mode_for(int(stage or 0), available_at, now or _now())
+    prompts = []
+    if not meaning_ok:
+        prompts.append("meaning")
+    if reading and not reading_ok:
+        prompts.append("reading")
+    item = {
+        "subject_id": sid,
+        "level": item_level,
+        "type": "vocabulary" if object_type == "kana_vocabulary" else object_type,
+        "characters": characters,
+        "image_url": None if characters else image_url(raw),
+        "stage": stage,
+        "stage_name": stage_name(stage),
+        "mode": mode,
+        "needs_reading": reading,
+        "prompts": prompts or (["meaning", "reading"] if reading else ["meaning"]),
+    }
+    # Fresh off a miss (back on the floor): open with the teaching card.
+    if mode == "relearn" and stage == RELEARN_FLOOR:
+        try:
+            item["card"] = fetch_inspect(db, sid)
+            # The card's SRS label is the old WaniKani snapshot; the course has its own.
+            item["card"].update({"image_url": item["image_url"], "needs_reading": reading, "srs_name": None})
+        except Exception:
+            pass
+    return item
 
 
 def _whitelist(raw):
@@ -631,6 +641,9 @@ def answer(db, subject_id, prompt_type, text=None, gave_up=False):
     })
     if new >= GURU > stage:
         payload["level_passed"] = _check_pass(db, level, now)
+    from shared.daily import mark_done
+
+    payload["daily"] = mark_done(db, subject_id)
     return _with_reveal(db, payload, subject_id)
 
 

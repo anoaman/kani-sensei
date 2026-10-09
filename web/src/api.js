@@ -50,6 +50,7 @@ export const api = {
   courseQueue: (level, mode) =>
     request(`/api/course?action=queue&level=${encodeURIComponent(level)}&mode=${encodeURIComponent(mode)}`),
   sky: () => request("/api/course?action=sky"),
+  daily: (summary = false) => request(`/api/course?action=daily${summary ? "&summary=1" : ""}`),
   courseAnswer: (body) =>
     request("/api/course?action=answer", { method: "POST", body: JSON.stringify(body) }),
   inspect: (subjectId) =>
