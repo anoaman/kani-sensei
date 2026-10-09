@@ -31,7 +31,7 @@ from shared.quiz import (
 
 
 ALLOWED_KINDS = ("recall", "reverse", "mc", "speed")
-ALLOWED_POOLS = ("decay", "burned", "leeches", "due", "misses")
+ALLOWED_POOLS = ("decay", "burned", "leeches", "due", "misses", "rot", "rot_hard")
 
 SCHEMA_STATEMENTS = (
     """
@@ -142,7 +142,12 @@ def filter_pool(items, pool, miss_ids=None):
     return list(items)
 
 
-def _weight_item(item, pool):
+def _weight_item(item, pool, miss_ids=None):
+    if pool in ("rot", "rot_hard"):
+        # Everything that says "this is slipping": decay, leech history, and
+        # recent Sensei misses.
+        missed = 15 if item["subject_id"] in (miss_ids or ()) else 0
+        return int((item.get("decay_score") or 0) + leech_score(item) * 20 + missed)
     if pool == "leeches":
         return (leech_score(item) * 20) + (item.get("decay_score") or 0)
     if pool == "burned":
@@ -155,13 +160,19 @@ def _weight_item(item, pool):
     return item.get("decay_score") or 0
 
 
-def sample_for_pool(items, count, rng, pool):
+def sample_for_pool(items, count, rng, pool, miss_ids=None):
+    miss_ids = set(miss_ids or ())
     tagged = []
     for item in items:
         clone = dict(item)
-        clone["decay_score"] = _weight_item(item, pool)
+        clone["decay_score"] = _weight_item(item, pool, miss_ids)
         tagged.append(clone)
-    return sample_weighted(tagged, count, rng)
+    if pool == "rot_hard" and len(tagged) >= count * 2:
+        # Hard mode: only the softer half of what you know.
+        weights = sorted(item["decay_score"] for item in tagged)
+        median = weights[len(weights) // 2]
+        tagged = [item for item in tagged if item["decay_score"] >= median] or tagged
+    return sample_weighted(tagged, min(count, len(tagged)), rng)
 
 
 def _fetch_miss_ids(db):
@@ -333,7 +344,7 @@ def build_drill(
         raise ValueError(_empty_pool_message(pool, min_level, max_level))
 
     sample_size = min(len(items), max(count * 3, count + 8))
-    candidates = sample_for_pool(items, sample_size, rng, pool)
+    candidates = sample_for_pool(items, sample_size, rng, pool, miss_ids)
 
     questions = []
     used = set()
@@ -434,6 +445,7 @@ def persist_drill(db, drill):
                 "object_types": drill["object_types"],
                 "weighting": drill["weighting"],
                 "seconds": drill.get("seconds"),
+                **(drill.get("rules") or {}),
             }),
         ],
     )
@@ -576,6 +588,8 @@ def _sensei_verdict(correct, total):
 # A missed item comes back this many questions later, at most this many times.
 REQUEUE_GAP = 3
 MAX_REQUEUES = 2
+# Slack on a timed question for the network round trip.
+TIMER_GRACE_SECONDS = 3
 _ALL_KANA_RE = re.compile(r"^[\u3040-\u30ffー]+$")
 
 
@@ -718,8 +732,14 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
     now = datetime.now(timezone.utc).isoformat()
 
     almost = False
+    timed_out = False
     submitted = ""
     chosen_index = None
+    limit = meta.get("question_seconds")
+    seen_at = (meta.get("seen") or {}).get(str(qid))
+    if limit and seen_at and not gave_up:
+        elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(seen_at)).total_seconds()
+        timed_out = elapsed > float(limit) + TIMER_GRACE_SECONDS
     if gave_up:
         is_correct = False
         submitted = ""
@@ -743,6 +763,10 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
         # Small typos pass, as on WaniKani; the reveal still flags the spelling.
         is_correct = result in ("correct", "almost")
         almost = result == "almost"
+    if timed_out:
+        # Out of time counts as a miss, whatever was typed.
+        is_correct = False
+        almost = False
 
     if is_correct:
         combo += 1
@@ -765,12 +789,17 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
     new_total = int(score_total) + (0 if is_retry else 1)
     answered = int(meta.get("answered", score_total) or 0) + 1
     meta["answered"] = answered
+    # A capped session (the phone gate) ends the moment it can't be passed.
+    allowed = meta.get("allowed_misses")
+    failed = allowed is not None and (new_total - new_correct) > int(allowed)
+    if failed:
+        meta["failed"] = True
     requeued = None
-    if not is_correct and kind != "speed":
+    if not is_correct and kind != "speed" and not failed:
         requeued = _requeue_miss(db, session_id, qid, meta)
         if requeued:
             question_count = int(question_count) + 1
-    finished = answered >= int(question_count)
+    finished = failed or answered >= int(question_count)
     db.execute(
         """
         update drill_sessions
@@ -795,6 +824,8 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
         "correct": is_correct,
         "almost": almost,
         "gave_up": bool(gave_up),
+        "timed_out": timed_out,
+        "failed": failed,
         "correct_index": correct_index,
         "correct_answer": correct_answer,
         "chosen_index": chosen_index,

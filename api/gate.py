@@ -2,8 +2,9 @@
 
 GET  /api/gate                      {"open", "reason", "until"}
 GET  /api/gate?format=text          plain "open" or "locked", for Shortcuts
-POST /api/gate?action=start         a fresh gate: {gate_id, items}
-POST /api/gate?action=finish {gate_id}  passes once every item finished a round
+POST /api/gate?action=start         the open gate, or a fresh one: {gate_id, drill, tier}
+POST /api/gate?action=seen {gate_id, question_id}  start that question's clock
+POST /api/gate?action=finish {gate_id}  pass/fail once the quiz is over
 """
 
 from http.server import BaseHTTPRequestHandler
@@ -13,7 +14,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.auth import query_params, read_json_body
 from shared.course import jsonable
-from shared.gate import finish, start, status
+from shared.gate import finish, seen, start, status
 from shared.http_util import respond
 from shared.neon import NeonClient
 
@@ -49,6 +50,8 @@ class handler(BaseHTTPRequestHandler):
             with db.reuse():
                 if action == "start":
                     result = start(db)
+                elif action == "seen":
+                    result = seen(db, int(body.get("gate_id")), str(body.get("question_id")))
                 elif action == "finish":
                     result = finish(db, int(body.get("gate_id")))
                 else:

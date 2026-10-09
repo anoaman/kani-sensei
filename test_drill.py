@@ -295,3 +295,53 @@ class DrillRequeueTests(unittest.TestCase):
         retry = result["requeued"]
         new = db.questions[retry["id"]]
         self.assertEqual(new["choices"][new["correct_index"]], "Big")
+
+
+class GateRulesInDrillTests(unittest.TestCase):
+    def test_capped_session_ends_once_it_cannot_pass(self):
+        from shared.drill import grade_drill
+        db = FakeDrillDb("meaning", ["Big"], count=5)
+        db.add_question("q2", 1, "meaning", ["Big"])
+        db.session["meta"] = {"allowed_misses": 1}
+        first = grade_drill(db, "s1", "q1", text="small")
+        self.assertFalse(first["failed"])
+        self.assertTrue(first["requeued"])
+        second = grade_drill(db, "s1", "q2", text="small")
+        self.assertTrue(second["failed"])
+        self.assertIsNone(second["requeued"])
+        self.assertTrue(second["score"]["finished"])
+
+    def test_answer_after_the_clock_is_a_miss(self):
+        from datetime import datetime, timedelta, timezone
+        from shared.drill import grade_drill
+        db = FakeDrillDb("meaning", ["Big"])
+        late = (datetime.now(timezone.utc) - timedelta(seconds=40)).isoformat()
+        db.session["meta"] = {"question_seconds": 15, "seen": {"q1": late}}
+        result = grade_drill(db, "s1", "q1", text="big")
+        self.assertFalse(result["correct"])
+        self.assertTrue(result["timed_out"])
+
+    def test_answer_inside_the_clock_counts(self):
+        from datetime import datetime, timezone
+        from shared.drill import grade_drill
+        db = FakeDrillDb("meaning", ["Big"])
+        db.session["meta"] = {"question_seconds": 15, "seen": {"q1": datetime.now(timezone.utc).isoformat()}}
+        result = grade_drill(db, "s1", "q1", text="big")
+        self.assertTrue(result["correct"])
+        self.assertFalse(result["timed_out"])
+
+
+class RotPoolTests(unittest.TestCase):
+    def test_misses_and_leeches_weigh_more(self):
+        from shared.drill import _weight_item
+        plain = {"subject_id": 1, "decay_score": 10}
+        leech = {"subject_id": 2, "decay_score": 10, "meaning_incorrect": 8, "meaning_correct": 2}
+        self.assertGreater(_weight_item(leech, "rot"), _weight_item(plain, "rot"))
+        self.assertEqual(_weight_item(plain, "rot", {1}), 25)
+
+    def test_hard_pool_keeps_the_softer_half(self):
+        import random
+        from shared.drill import sample_for_pool
+        items = [{"subject_id": i, "decay_score": i} for i in range(40)]
+        picked = sample_for_pool(items, 10, random.Random(1), "rot_hard")
+        self.assertTrue(all(item["decay_score"] >= 20 for item in picked))

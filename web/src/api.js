@@ -52,6 +52,8 @@ export const api = {
   sky: () => request("/api/course?action=sky"),
   gateStatus: () => request("/api/gate"),
   gateStart: () => request("/api/gate?action=start", { method: "POST", body: "{}" }),
+  gateSeen: (gateId, questionId) =>
+    request("/api/gate?action=seen", { method: "POST", body: JSON.stringify({ gate_id: gateId, question_id: questionId }) }),
   gateFinish: (gateId) =>
     request("/api/gate?action=finish", { method: "POST", body: JSON.stringify({ gate_id: gateId }) }),
   daily: (summary = false) => request(`/api/course?action=daily${summary ? "&summary=1" : ""}`),

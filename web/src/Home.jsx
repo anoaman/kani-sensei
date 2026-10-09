@@ -66,8 +66,10 @@ function WarmUp({ levels }) {
 }
 
 // Five typed questions, misses come back. Used by the home warm-up and the
-// phone gate; `done` replaces the default finish screen.
-export function QuickQuiz({ kicker, meta, start, onFinished, done, autoFocus = false }) {
+// phone gate; `done` replaces the default finish screen. A drill carrying
+// `question_seconds` is timed: `onSeen(question)` starts the server's clock
+// and returns what's left on it.
+export function QuickQuiz({ kicker, meta, start, onFinished, onSeen, done, autoFocus = false }) {
   const [session, setSession] = useState(null);
   const [index, setIndex] = useState(0);
   const [typed, setTyped] = useState("");
@@ -76,7 +78,10 @@ export function QuickQuiz({ kicker, meta, start, onFinished, done, autoFocus = f
   const [score, setScore] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [deadline, setDeadline] = useState(null);
+  const [left, setLeft] = useState(null);
   const composing = useRef(false);
+  const timedOut = useRef(null);
   const inputRef = useRef(null);
   // Don't grab focus (and pop a phone keyboard) until the warm-up is in use.
   const engaged = useRef(autoFocus);
@@ -84,6 +89,8 @@ export function QuickQuiz({ kicker, meta, start, onFinished, done, autoFocus = f
   const question = session?.questions?.[index];
   const isReading = question?.prompt_type === "reading";
   const finished = session && index >= session.questions.length;
+  const offset = session?.answered || 0; // a resumed gate picks up mid-way
+  const limit = session?.question_seconds || null;
 
   async function begin() {
     setBusy(true);
@@ -93,7 +100,7 @@ export function QuickQuiz({ kicker, meta, start, onFinished, done, autoFocus = f
       reported.current = false;
       setSession(drill);
       setIndex(0);
-      setScore(0);
+      setScore(drill.first_try_correct || 0);
       setFeedback(null);
       setTyped("");
     } catch (err) {
@@ -114,22 +121,59 @@ export function QuickQuiz({ kicker, meta, start, onFinished, done, autoFocus = f
     if (engaged.current && question && !feedback) inputRef.current?.focus({ preventScroll: true });
   }, [question, feedback]);
 
+  // Timed drills: the server starts the clock when a question first shows.
+  useEffect(() => {
+    setDeadline(null);
+    setLeft(null);
+    if (!question || feedback || !limit || !onSeen) return undefined;
+    let live = true;
+    onSeen(question)
+      .then((res) => { if (live) setDeadline(Date.now() + (res?.seconds_left ?? limit) * 1000); })
+      .catch(() => { if (live) setDeadline(Date.now() + limit * 1000); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [question?.id, Boolean(feedback), limit]);
+
+  useEffect(() => {
+    if (!deadline || feedback) return undefined;
+    const tick = () => {
+      const ms = deadline - Date.now();
+      setLeft(Math.max(0, ms));
+      if (ms <= 0 && !busy && timedOut.current !== question?.id) {
+        timedOut.current = question?.id;
+        answer({ gave_up: true });
+      }
+    };
+    tick();
+    const id = setInterval(tick, 200);
+    // Switching apps to look it up doesn't pause anything.
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  });
+
   async function submit(event) {
     event?.preventDefault();
     if (!question || feedback || busy) return;
     const text = (isReading ? toKana(typed.toLowerCase()) : typed).trim();
     if (!text) return;
     engaged.current = true;
+    await answer({ text });
+  }
+
+  async function answer(body) {
     setBusy(true);
     try {
-      const result = await api.answerDrill({ session_id: session.session_id, question_id: question.id, text });
+      const result = await api.answerDrill({ session_id: session.session_id, question_id: question.id, ...body });
       if (result.retry) {
         setHint(result.hint);
         return;
       }
       setHint("");
       setFeedback(result);
-      if (result.correct) setScore((value) => value + 1);
+      if (result.score) setScore(result.score.correct); // first-try, from the server
       if (result.requeued) {
         setSession((prev) => ({ ...prev, questions: [...prev.questions, { ...result.requeued, prompt_text: question.prompt_text }] }));
       }
@@ -141,9 +185,11 @@ export function QuickQuiz({ kicker, meta, start, onFinished, done, autoFocus = f
   }
 
   function next() {
+    const over = feedback?.failed;
     setFeedback(null);
     setTyped("");
-    setIndex((value) => value + 1);
+    // A capped quiz that can no longer pass ends right here.
+    setIndex((value) => (over ? session.questions.length : value + 1));
   }
 
   useEffect(() => {
@@ -175,8 +221,13 @@ export function QuickQuiz({ kicker, meta, start, onFinished, done, autoFocus = f
         <>
           <div className={`warmup-band ${isReading ? "reading" : ""}`}>
             {question.object_type === "kanji" ? "Kanji" : question.object_type === "radical" ? "Radical" : "Vocabulary"} <b>{isReading ? "reading" : "meaning"}</b>
-            <span>{index + 1}/{session.questions.length}</span>
+            <span>{offset + index + 1}/{offset + session.questions.length}</span>
           </div>
+          {limit && !feedback && left != null ? (
+            <div className={`quiz-timer${left < 5000 ? " low" : ""}`} aria-label={`${Math.ceil(left / 1000)} seconds left`}>
+              <i style={{ width: `${Math.min(100, (left / (limit * 1000)) * 100)}%` }} />
+            </div>
+          ) : null}
           <div className={`warmup-glyph ${feedback ? (feedback.correct ? "ok" : "nope") : ""}`} lang="ja" key={question.id}>
             {question.characters}
           </div>
@@ -200,7 +251,7 @@ export function QuickQuiz({ kicker, meta, start, onFinished, done, autoFocus = f
             </form>
           ) : (
             <div className="warmup-answer">
-              <strong>{feedback.correct ? (feedback.almost ? "Close enough." : "Yes.") : "It was"}</strong>{" "}
+              <strong>{feedback.correct ? (feedback.almost ? "Close enough." : "Yes.") : feedback.timed_out || feedback.gave_up ? "Out of time. It was" : "It was"}</strong>{" "}
               {isReading
                 ? (feedback.reveal?.readings || []).join(" / ")
                 : feedback.reveal?.meaning || feedback.correct_answer}

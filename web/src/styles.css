@@ -325,6 +325,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .warmup-band { display: flex; gap: 6px; align-items: center; margin-top: 16px; padding: 6px 10px; font-size: 12px; color: #fff; background: var(--kanji); border-radius: 3px; }
 .warmup-band.reading { background: #2b2a28; box-shadow: inset 3px 0 0 var(--kanji); }
 .warmup-band span { margin-left: auto; opacity: .8; }
+.quiz-timer { height: 3px; margin-top: 4px; background: rgba(0,0,0,.08); border-radius: 2px; overflow: hidden; }
+.quiz-timer i { display: block; height: 100%; background: var(--kanji); transition: width .2s linear; }
+.quiz-timer.low i { background: #c0392b; }
 .warmup-glyph { margin: 14px 0 12px; text-align: center; font-family: var(--jp); font-size: clamp(64px, 9vw, 92px); font-weight: 700; line-height: 1.15; transition: color .2s ease; animation: rise .35s ease; }
 .warmup-glyph.ok { color: var(--ok); }
 .warmup-glyph.nope { color: var(--ver); }
