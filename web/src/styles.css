@@ -144,7 +144,21 @@ p { line-height: 1.6; }
 .field input, .field select, .recall-form input { min-height: 48px; width: 100%; padding: 0 13px; border: 1px solid var(--line); border-radius: 3px; background: rgba(255,255,255,.65); color: var(--ink); }
 .check-row { display: flex; gap: 8px; align-items: center; margin-top: 18px; font-size: 13px; }
 .note, .muted, .meta { color: var(--ink-soft); font-size: 13px; }
-.quiz-stage { max-width: 780px; margin: 0 auto; }
+.quiz-stage { max-width: 980px; margin: 0 auto; }
+.quiz-stage .prompt { padding: 36px 0 44px; }
+.quiz-stage .chars { font-size: clamp(96px, 17vw, 180px); }
+.quiz-stage .recall-form { max-width: 720px; gap: 12px; }
+.quiz-stage .recall-form input { min-height: 64px; font-size: 24px; padding: 0 18px; }
+.quiz-stage .recall-form .primary-btn { min-height: 64px; padding: 0 28px; font-size: 17px; }
+.quiz-stage .choice { min-height: 76px; padding: 16px 20px; font-size: 19px; }
+.quiz-stage .choice-num { width: 28px; height: 28px; font-size: 13px; }
+.quiz-stage .glyph-choice { font-size: 44px; }
+.quiz-stage .reveal { padding: 22px 24px; font-size: 19px; line-height: 1.5; }
+.quiz-stage .reveal .meta { font-size: 15px; }
+.quiz-stage .drill-hint { font-size: 15px; }
+.quiz-stage .prompt-band { padding: 12px 18px; font-size: 16px; }
+.quiz-stage .note, .quiz-stage .muted { font-size: 15px; }
+.quiz-stage .text-btn { font-size: 15px; }
 .drill-meter { margin-bottom: 36px; }
 .meter-track { height: 4px; background: var(--paper-deep); }
 .meter-fill { height: 100%; background: var(--ver); transition: width .2s ease; }
@@ -358,7 +372,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 
 .kanji-field { position: relative; height: clamp(300px, 34vw, 420px); }
-.kanji-field canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: pan-y; }
+.brush-sheet { position: absolute; left: 50%; top: 0; transform: translateX(-50%); height: calc(100% - 46px); aspect-ratio: 1; }
+.brush-sheet svg, .brush-sheet canvas { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.practice-grid rect, .practice-grid line { fill: none; stroke: var(--ver); stroke-opacity: .28; stroke-width: .35; }
+.practice-grid line { stroke-dasharray: 1.6 1.4; }
+.ink-fallback { font-family: var(--jp); font-size: 82px; font-weight: 700; fill: var(--ink); text-anchor: middle; dominant-baseline: middle; animation: rise .8s ease; }
+.field-caption i { font-style: normal; font-weight: 400; color: var(--ink-soft); }
+.field-credit { position: absolute; right: 0; bottom: 6px; font-size: 10px; color: var(--ink-soft); opacity: .7; text-decoration: none; }
+.field-credit:hover { opacity: 1; text-decoration: underline; }
 .field-caption { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 6px 14px 6px 8px; border: 1px solid var(--line); border-radius: 999px; background: rgba(242,237,226,.85); backdrop-filter: blur(4px); cursor: pointer; white-space: nowrap; animation: rise .5s ease; }
 .field-caption:hover { border-color: var(--ink); }
 .field-caption > span:first-child { font-family: var(--jp); font-size: 20px; font-weight: 700; color: var(--ver); }
@@ -419,4 +440,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .sky-col.started .sky-label { border-right-color: var(--ink); }
   .sky-dots { display: flex; flex-wrap: wrap; gap: 2px; }
   .dot { width: 6px; height: 6px; }
+}
+@media (max-width: 860px) {
+  .quiz-stage .prompt { padding: 16px 0 26px; }
+  .quiz-stage .recall-form input { min-height: 56px; font-size: 21px; }
+  .quiz-stage .choice { min-height: 64px; font-size: 17px; }
+  .kanji-field .field-credit { bottom: auto; top: 0; }
 }
