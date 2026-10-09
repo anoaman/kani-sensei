@@ -32,6 +32,46 @@ function greeting() {
   return "Night shift";
 }
 
+// Time until the day's set rolls over at WIB midnight.
+function leftToday() {
+  const wib = new Date(Date.now() + 7 * 3600 * 1000);
+  const mins = 24 * 60 - (wib.getUTCHours() * 60 + wib.getUTCMinutes());
+  const h = Math.floor(mins / 60);
+  return h ? `${h}h ${mins % 60}m left today` : `${mins}m left today`;
+}
+
+function TodayTarget({ today, go }) {
+  const { done, total, completed, streak } = today;
+  const left = total - done;
+  return (
+    <div className={`today-target${completed ? " complete" : ""}`}>
+      <div className="today-head">
+        <p className="kicker">Today's target</p>
+        <span>{completed ? "Done for today" : leftToday()}</span>
+      </div>
+      <div className="today-count">
+        <b>{done}</b><span>/ {total}</span>
+        <em>{completed ? "✓ cleared" : `${left} to go`}</em>
+      </div>
+      <div className="today-pips" style={{ gridTemplateColumns: `repeat(${total}, 1fr)` }} aria-label={`${done} of ${total} done`}>
+        {Array.from({ length: total }, (_, i) => <i key={i} className={i < done ? "on" : ""} />)}
+      </div>
+      <div className="today-foot">
+        <span>
+          {streak
+            ? <><span className="streak">{streak}-day streak</span>{completed ? "" : " on the line"}</>
+            : completed ? "Streak starts today" : "Finish it to start a streak"}
+        </span>
+        {completed ? null : (
+          <button className="go-btn" onClick={() => go("/today")}>
+            {done ? "Finish today's set" : "Start today's set"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function pickNext(levels) {
   const started = levels.filter((level) => level.started);
   for (const mode of ["reviews", "relearn", "check"]) {
@@ -372,22 +412,7 @@ export default function Home({ go }) {
               ? <>You've brought back <b>{known.toLocaleString()}</b> of {total.toLocaleString()} items across {startedCount} {startedCount === 1 ? "level" : "levels"}.</>
               : <>{total.toLocaleString()} items from levels 1–{levels.length} are still in there somewhere. Let's find out how many.</>}
           </p>
-          {today?.total && !today.completed ? (
-            <div className="home-next">
-              <button className="go-btn" onClick={() => go("/today")}>
-                {today.done ? "Finish today's set" : "Start today's set"}
-              </button>
-              <span>
-                <b>{today.done}/{today.total}</b> done
-                {today.streak ? <> · <span className="streak">{today.streak}-day streak</span> on the line</> : " · day one of the streak"}
-              </span>
-            </div>
-          ) : null}
-          {today?.completed ? (
-            <p className="daily-done">
-              Today's set ✓ · <span className="streak">{today.streak}-day streak</span>
-            </p>
-          ) : null}
+          {today?.total ? <TodayTarget today={today} go={go} /> : null}
           {next && !(today?.total && !today.completed) ? (
             <div className="home-next">
               <button
