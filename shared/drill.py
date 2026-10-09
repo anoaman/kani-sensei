@@ -499,6 +499,10 @@ def start_drill(
         miss_ids=miss_ids,
     )
     persist_drill(db, drill)
+    return public_drill(drill)
+
+
+def public_drill(drill):
     return {
         "session_id": drill["session_id"],
         "kind": drill["kind"],

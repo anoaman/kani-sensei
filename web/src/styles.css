@@ -450,3 +450,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .daily-done { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0 14px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; font-size: 14px; color: var(--ink-soft); }
 .daily-done b { color: var(--ink); }
 .streak { color: var(--ver); font-weight: 600; }
+.gate { max-width: 560px; margin: 0 auto; padding: 40px 0 80px; }
+.gate h1 { margin: 4px 0 8px; font-family: var(--serif); font-size: clamp(30px, 6vw, 44px); line-height: 1.1; }
+.gate > .muted { margin: 0 0 22px; font-size: 15px; }
+.gate .warmup-glyph { font-size: clamp(88px, 22vw, 130px); }
+.gate .warmup-form input { min-height: 56px; font-size: 21px; }

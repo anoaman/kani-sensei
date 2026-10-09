@@ -103,7 +103,7 @@ function LessonCard({ card, index, total }) {
   );
 }
 
-export default function CourseSession({ level, mode, daily = false, gate = false, go, onFocus }) {
+export default function CourseSession({ level, mode, daily = false, go, onFocus }) {
   const [phase, setPhase] = useState("loading");
   const [items, setItems] = useState({});
   const [cards, setCards] = useState([]);
@@ -119,8 +119,6 @@ export default function CourseSession({ level, mode, daily = false, gate = false
   const [stats, setStats] = useState({ answered: 0, correct: 0, done: [], passed: false });
   const [passes, setPasses] = useState({});
   const [today, setToday] = useState(null); // daily: { done, total, streak, completed }
-  const [gateId, setGateId] = useState(null);
-  const [gateStatus, setGateStatus] = useState(null); // { open, reason, until }
   const composing = useRef(false);
   const inputRef = useRef(null);
 
@@ -134,23 +132,14 @@ export default function CourseSession({ level, mode, daily = false, gate = false
     return () => onFocus?.(false);
   }, [phase, onFocus]);
 
-  async function load(force = false) {
+  async function load() {
     setPhase("loading");
     setError("");
     setStats({ answered: 0, correct: 0, done: [], passed: false });
     setFeedback(null);
     setPasses({});
     try {
-      if (gate && !force) {
-        const state = await api.gateStatus();
-        if (state.open) {
-          setGateStatus(state);
-          setPhase("open");
-          return;
-        }
-      }
-      const data = gate ? await api.gateStart() : daily ? await api.daily() : await api.courseQueue(level, mode);
-      if (gate) setGateId(data.gate_id);
+      const data = daily ? await api.daily() : await api.courseQueue(level, mode);
       const list = data.items || [];
       if (daily) setToday({ done: data.done, total: data.total, streak: data.streak, completed: data.completed });
       setItems(Object.fromEntries(list.map((entry) => [entry.subject_id, entry])));
@@ -159,10 +148,6 @@ export default function CourseSession({ level, mode, daily = false, gate = false
       const fresh = list.filter((entry) => entry.card).map((entry) => ({ ...entry.card, needs_reading: entry.needs_reading }));
       setCards(fresh);
       setCardIndex(0);
-      if (gate && !list.length) {
-        await finishGate(data.gate_id);
-        return;
-      }
       setPhase(!list.length ? (daily && data.total ? "done" : "empty") : fresh.length ? "learn" : "quiz");
     } catch (err) {
       setError(err.message || "Could not load");
@@ -170,24 +155,7 @@ export default function CourseSession({ level, mode, daily = false, gate = false
     }
   }
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [level, mode, daily, gate]);
-
-  async function finishGate(id = gateId) {
-    setPhase("loading");
-    try {
-      const result = await api.gateFinish(id);
-      setGateStatus(result.status);
-      if (!result.passed) {
-        setError("Some items didn't register. One more round.");
-        load(true);
-        return;
-      }
-      setPhase("done");
-    } catch (err) {
-      setError(err.message || "Could not finish the gate");
-      setPhase("done");
-    }
-  }
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [level, mode, daily]);
 
   useEffect(() => {
     if (phase === "quiz" && !feedback && inputRef.current) inputRef.current.focus();
@@ -248,11 +216,11 @@ export default function CourseSession({ level, mode, daily = false, gate = false
     setTyped("");
     setDetails(false);
     let rest = queue.slice(1);
-    if (!result.correct && (gate || result.mode !== "check")) {
+    if (!result.correct && result.mode !== "check") {
       // The half stays open until it's right: bring it back in a few.
       rest.splice(Math.min(rest.length, RETRY_GAP), 0, current);
     }
-    if (!gate && result.item_done && result.mode === "relearn" && result.stage < 5) {
+    if (result.item_done && result.mode === "relearn" && result.stage < 5) {
       const count = (passes[result.subject_id] || 0) + 1;
       setPasses({ ...passes, [result.subject_id]: count });
       if (count < MAX_PASSES) {
@@ -266,10 +234,7 @@ export default function CourseSession({ level, mode, daily = false, gate = false
       setItems((prev) => ({ ...prev, [result.subject_id]: { ...prev[result.subject_id], stage: result.stage, stage_name: result.stage_name } }));
     }
     setQueue(rest);
-    if (!rest.length) {
-      if (gate) finishGate();
-      else setPhase("done");
-    }
+    if (!rest.length) setPhase("done");
   }
 
   useEffect(() => {
@@ -294,17 +259,16 @@ export default function CourseSession({ level, mode, daily = false, gate = false
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const info = gate ? { title: "Gate" } : daily ? { title: "Today's set" } : MODE_INFO[mode] || MODE_INFO.check;
-  const title = gate ? "Five, then your app" : daily ? "Today's set" : `Level ${level} · ${info.title}`;
-  const backTo = daily || gate ? "dojo" : `/level/${level}`;
-  const until = gateStatus?.until ? new Date(gateStatus.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+  const info = daily ? { title: "Today's set" } : MODE_INFO[mode] || MODE_INFO.check;
+  const title = daily ? "Today's set" : `Level ${level} · ${info.title}`;
+  const backTo = daily ? "dojo" : `/level/${level}`;
   const remaining = new Set(queue.map((q) => q.subject_id)).size;
 
   return (
     <section className="panel focus-panel">
       <div className="section-head level-head">
         <div>
-          <button className="quiet-link" onClick={() => go(backTo)}>{daily || gate ? "← Home" : `← Level ${level}`}</button>
+          <button className="quiet-link" onClick={() => go(backTo)}>{daily ? "← Home" : `← Level ${level}`}</button>
           <h2>{title}</h2>
         </div>
         {phase === "quiz" ? (
@@ -317,17 +281,6 @@ export default function CourseSession({ level, mode, daily = false, gate = false
       {error ? <div className="error">{error}</div> : null}
 
       {phase === "loading" ? <p className="muted">Loading…</p> : null}
-
-      {phase === "open" && gateStatus ? (
-        <div className="quiz-stage surface gate-open">
-          <p className="kicker">{gateStatus.reason === "night" ? "Night" : "Clear"}</p>
-          <h3>{gateStatus.reason === "night" ? `Apps are open until ${until}. Go to sleep.` : `You're clear until ${until}. Go back to your app.`}</h3>
-          <div className="reveal-actions">
-            <button className="primary-btn" onClick={() => load(true)}>Drill five anyway</button>
-            <button className="ghost-btn" onClick={() => go("dojo")}>Home</button>
-          </div>
-        </div>
-      ) : null}
 
       {phase === "empty" ? (
         <div className="surface">
@@ -429,18 +382,7 @@ export default function CourseSession({ level, mode, daily = false, gate = false
         </div>
       ) : null}
 
-      {phase === "done" && gate ? (
-        <div className="quiz-stage surface gate-open">
-          <p className="kicker">Gate cleared</p>
-          <h3>{until ? `Unlocked until ${until}.` : "Unlocked."} Swipe back to your app.</h3>
-          {stats.answered ? <p className="muted">{stats.correct}/{stats.answered} first-try right. Misses came back until they stuck.</p> : null}
-          <div className="reveal-actions">
-            <button className="ghost-btn" onClick={() => go("/today")}>Keep going on today's set</button>
-          </div>
-        </div>
-      ) : null}
-
-      {phase === "done" && !gate ? (
+      {phase === "done" ? (
         <div className="quiz-stage surface">
           <p className="kicker">{info.title} done</p>
           {daily && today ? (

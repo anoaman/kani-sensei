@@ -1,23 +1,26 @@
 """The gate: an iPhone Shortcut asks before a time-sink app opens.
 
 Between 08:00 and 22:00 WIB the apps lock every WINDOW hours. Clearing a gate
-(GATE_SIZE items, misses come back until right) opens them for the next
-WINDOW hours. Night is always open. Gate items come out of today's set first,
-so the gates finish the daily set as a side effect.
+opens them for the next WINDOW hours. Night is always open.
 
-A pass is verified, not trusted: the gate snapshots each item's review_count
-at start, and only passes once every item has finished a round since.
+A gate is a quick quiz, not coursework: GATE_SIZE typed questions on things
+you've already Guru'd (in the course first; WaniKani-snapshot Guru+ tops up a
+thin pool), weighted toward rot. Misses come back until right. It never
+touches course SRS. A pass is verified: the drill session must be finished.
 """
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 
-from shared.course import QUEUE_COLUMNS, queue_item
-from shared.daily import WIB, ensure_schema as ensure_daily_schema, fetch_daily
+from shared.course import GURU
+from shared.daily import WIB, ensure_schema as ensure_daily_schema
+from shared.drill import build_drill, ensure_schema as ensure_drill_schema, persist_drill, public_drill
+from shared.quiz import fetch_pool
 
 GATE_SIZE = 5
+MIN_POOL = 15  # below this many course Guru items, borrow WaniKani's
+GATE_TYPES = ["radical", "kanji", "vocabulary", "kana_vocabulary"]
 WINDOW = timedelta(hours=3)
 DAY_START = 8   # WIB hour the gate wakes up
 DAY_END = 22    # WIB hour it goes to sleep
@@ -31,6 +34,7 @@ create table if not exists gates (
     passed_at    timestamptz
 )
 """
+DRILL_COLUMN = "alter table gates add column if not exists drill_id uuid"
 
 _SCHEMA_READY = False
 
@@ -40,13 +44,9 @@ def ensure_schema(db):
     if _SCHEMA_READY:
         return
     ensure_daily_schema(db)
-    try:
-        if db.has_relation("public.gates"):
-            _SCHEMA_READY = True
-            return
-    except Exception:
-        pass
+    ensure_drill_schema(db)
     db.execute(SCHEMA)
+    db.execute(DRILL_COLUMN)
     _SCHEMA_READY = True
 
 
@@ -87,75 +87,64 @@ def status(db, now=None):
     return {**state, "until": state["until"].isoformat() if state["until"] else None}
 
 
-def _top_up(db, exclude, limit):
-    """Today's set is done or short: relearns, then due reviews, then the
-    Guru+ items closest to due (study ahead)."""
-    if limit <= 0:
-        return []
-    rows = db.execute(
-        f"""
-        select {QUEUE_COLUMNS}
-        from course_items c
-        join wk_subjects s on s.id = c.subject_id
-        where c.srs_stage between 1 and 8 and not (c.subject_id = any(%s))
-        order by
-          case when c.srs_stage < 5 then 0 when c.available_at <= now() then 1 else 2 end,
-          c.available_at, random()
-        limit %s
-        """,
-        [list(exclude), limit],
-        fetch=True,
-    )
-    return [queue_item(db, row) for row in rows]
+def _guru(db, table):
+    sql = f"select subject_id from {table} where srs_stage >= %s"
+    return {int(row[0]) for row in db.execute(sql, [GURU], fetch=True)}
+
+
+def gate_pool(db):
+    """Quiz rows for items you've Guru'd: the course's first; WaniKani's
+    snapshot Guru+ joins in while the course pool is thin."""
+    rows = fetch_pool(db, 1, 60, object_types=GATE_TYPES)
+    course = _guru(db, "course_items")
+    picked = [row for row in rows if int(row[0]) in course]
+    if len(picked) >= MIN_POOL:
+        return picked
+    known = course | _guru(db, "wk_assignments")
+    return [row for row in rows if int(row[0]) in known]
 
 
 def start(db, size=GATE_SIZE):
     ensure_schema(db)
-    items = fetch_daily(db)["items"][:size]
-    items += _top_up(db, {item["subject_id"] for item in items}, size - len(items))
-    ids = [item["subject_id"] for item in items]
-    baseline = {}
-    if ids:
-        rows = db.execute(
-            "select subject_id, review_count from course_items where subject_id = any(%s)",
-            [ids],
+    rows = gate_pool(db)
+    if not rows:
+        # Nothing Guru'd yet: let the gate through rather than brick the phone.
+        rows_id = db.execute(
+            "insert into gates (subject_ids, baseline, passed_at) values ('{}', '{}', now()) returning id",
             fetch=True,
         )
-        baseline = {str(sid): int(count) for sid, count in rows}
-    rows = db.execute(
-        "insert into gates (subject_ids, baseline) values (%s, %s) returning id",
-        [ids, json.dumps(baseline)],
+        return {"gate_id": rows_id[0][0], "drill": None, "status": status(db)}
+    drill = build_drill(
+        rows, min_level=1, max_level=60, count=size, modes=["meaning", "reading"],
+        kind="recall", pool="decay", object_types=GATE_TYPES,
+    )
+    persist_drill(db, drill)
+    ids = [q["subject_id"] for q in drill["questions"]]
+    gate = db.execute(
+        "insert into gates (subject_ids, baseline, drill_id) values (%s, '{}', %s::uuid) returning id",
+        [ids, drill["session_id"]],
         fetch=True,
     )
-    return {"gate_id": rows[0][0], "items": items, "status": status(db)}
+    return {"gate_id": gate[0][0], "drill": public_drill(drill), "status": status(db)}
 
 
 def finish(db, gate_id):
-    """Pass the gate if every item finished a round since it started."""
+    """Pass the gate once its quiz is finished (every miss cleared)."""
     ensure_schema(db)
     rows = db.execute(
-        "select subject_ids, baseline, passed_at from gates where id = %s",
+        """
+        select g.passed_at, g.drill_id, d.finished_at
+        from gates g left join drill_sessions d on d.id = g.drill_id
+        where g.id = %s
+        """,
         [gate_id],
         fetch=True,
     )
     if not rows:
         raise ValueError("unknown gate")
-    subject_ids, baseline, passed_at = rows[0]
-    baseline = baseline if isinstance(baseline, dict) else json.loads(baseline or "{}")
+    passed_at, drill_id, finished_at = rows[0]
     if not passed_at:
-        ids = [int(x) for x in subject_ids or []]
-        current = {}
-        if ids:
-            current = {
-                str(sid): int(count)
-                for sid, count in db.execute(
-                    "select subject_id, review_count from course_items where subject_id = any(%s)",
-                    [ids],
-                    fetch=True,
-                )
-            }
-        pending = [sid for sid in ids if current.get(str(sid), 0) <= baseline.get(str(sid), 0)]
-        if pending:
-            return {"passed": False, "pending": pending, "status": status(db)}
+        if drill_id is None or finished_at is None:
+            return {"passed": False, "status": status(db)}
         db.execute("update gates set passed_at = now() where id = %s and passed_at is null", [gate_id])
-    return {"passed": True, "pending": [], "status": status(db)}
+    return {"passed": True, "status": status(db)}

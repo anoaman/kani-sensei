@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api.js";
 import TestView from "./TestView.jsx";
+import Gate from "./Gate.jsx";
 import CourseSession from "./CourseSession.jsx";
 import { LevelIndex, LevelPage } from "./LevelPages.jsx";
 import Home from "./Home.jsx";
@@ -226,7 +227,7 @@ export default function App() {
       {view === "course" ? (
         <CourseSession key={pathname} level={levelFromPath(pathname)} mode={pathname.split("/")[3]} go={navigate} onFocus={setFocus} />
       ) : null}
-      {view === "gate" ? <CourseSession key={pathname} gate go={navigate} onFocus={setFocus} /> : null}
+      {view === "gate" ? <Gate go={navigate} /> : null}
       {view === "today" ? <CourseSession key={pathname} daily go={navigate} onFocus={setFocus} /> : null}
       {view === "continue" ? <ContinueRoute key={pathname} level={levelFromPath(pathname)} go={navigate} /> : null}
       {customize && !focus ? <Customize data={data} navigate={navigate} onClose={() => setCustomize(false)} /> : null}

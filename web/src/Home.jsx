@@ -52,6 +52,22 @@ function WarmUp({ levels }) {
   const started = levels.filter((level) => level.started).map((level) => level.level);
   const min = started.length ? Math.min(...started) : 1;
   const max = started.length ? Math.max(...started) : 3;
+  return (
+    <QuickQuiz
+      key={`${min}-${max}`}
+      kicker="One-breath warm-up"
+      meta={`${started.length ? `Your levels ${min === max ? min : `${min}–${max}`}` : "Levels 1–3"} · 5 items`}
+      start={() => api.startDrill({
+        min_level: min, max_level: max, count: 5, kind: "recall", pool: "decay",
+        modes: ["meaning", "reading"], object_types: ["kanji", "vocabulary"],
+      })}
+    />
+  );
+}
+
+// Five typed questions, misses come back. Used by the home warm-up and the
+// phone gate; `done` replaces the default finish screen.
+export function QuickQuiz({ kicker, meta, start, onFinished, done, autoFocus = false }) {
   const [session, setSession] = useState(null);
   const [index, setIndex] = useState(0);
   const [typed, setTyped] = useState("");
@@ -63,7 +79,8 @@ function WarmUp({ levels }) {
   const composing = useRef(false);
   const inputRef = useRef(null);
   // Don't grab focus (and pop a phone keyboard) until the warm-up is in use.
-  const engaged = useRef(false);
+  const engaged = useRef(autoFocus);
+  const reported = useRef(false);
   const question = session?.questions?.[index];
   const isReading = question?.prompt_type === "reading";
   const finished = session && index >= session.questions.length;
@@ -72,10 +89,8 @@ function WarmUp({ levels }) {
     setBusy(true);
     setError("");
     try {
-      const drill = await api.startDrill({
-        min_level: min, max_level: max, count: 5, kind: "recall", pool: "decay",
-        modes: ["meaning", "reading"], object_types: ["kanji", "vocabulary"],
-      });
+      const drill = await start();
+      reported.current = false;
       setSession(drill);
       setIndex(0);
       setScore(0);
@@ -88,7 +103,13 @@ function WarmUp({ levels }) {
     }
   }
 
-  useEffect(() => { begin(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [min, max]);
+  useEffect(() => { begin(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => {
+    if (finished && !reported.current) {
+      reported.current = true;
+      onFinished?.(session);
+    }
+  }, [finished, session, onFinished]);
   useEffect(() => {
     if (engaged.current && question && !feedback) inputRef.current?.focus({ preventScroll: true });
   }, [question, feedback]);
@@ -140,11 +161,11 @@ function WarmUp({ levels }) {
   return (
     <div className="warmup">
       <div className="warmup-head">
-        <p className="kicker">One-breath warm-up</p>
-        <span>{started.length ? `Your levels ${min === max ? min : `${min}–${max}`}` : "Levels 1–3"} · 5 items</span>
+        <p className="kicker">{kicker}</p>
+        <span>{meta}</span>
       </div>
       {error ? <p className="drill-hint">{error}</p> : null}
-      {!session ? <div className="warmup-glyph dim" lang="ja">…</div> : finished ? (
+      {!session ? <div className="warmup-glyph dim" lang="ja">…</div> : finished && done ? done(score, session) : finished ? (
         <div className="warmup-done">
           <div className="warmup-glyph" lang="ja">{score >= 4 ? "良" : score >= 2 ? "可" : "再"}</div>
           <p>{score} of {session.questions.length} right. {score >= 4 ? "Still in there." : "Some of it is waiting for you."}</p>
@@ -153,7 +174,7 @@ function WarmUp({ levels }) {
       ) : question ? (
         <>
           <div className={`warmup-band ${isReading ? "reading" : ""}`}>
-            {question.object_type === "kanji" ? "Kanji" : "Vocabulary"} <b>{isReading ? "reading" : "meaning"}</b>
+            {question.object_type === "kanji" ? "Kanji" : question.object_type === "radical" ? "Radical" : "Vocabulary"} <b>{isReading ? "reading" : "meaning"}</b>
             <span>{index + 1}/{session.questions.length}</span>
           </div>
           <div className={`warmup-glyph ${feedback ? (feedback.correct ? "ok" : "nope") : ""}`} lang="ja" key={question.id}>
