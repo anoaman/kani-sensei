@@ -10,7 +10,7 @@ The product has four user-facing areas:
 - **Practice** — choose a single level or range, Kanji/Vocabulary/Radicals/Mixed,
   and a 10–40 question session.
 - **Progress** — recovery summary and the levels under the most pressure.
-- **Read** — level readings built from WaniKani's example sentences, a daily read, listening, and a Kanji Web for each level.
+- **Read** — level readings from WaniKani's example sentences, a daily read, a just-right feed, listening, recall, and a Kanji Web for each level.
 
 Ghosts, leeches, due items, and prior misses remain part of the drill engine,
 but are no longer separate destinations competing for attention.
@@ -19,28 +19,26 @@ but are no longer separate destinations competing for attention.
 
 | Endpoint | Method | Auth | Description |
 |---|---|---|---|
-| `/` | GET | cookie after login | Today — recommended recovery session |
-| `/practice` | GET | cookie | Focused-session builder |
-| `/session` | GET | cookie | Unified typed-recall session |
-| `/progress` | GET | cookie | Recovery summary and level pressure |
-| Legacy practice URLs | GET | cookie | Redirect into the simplified Practice experience |
-| `/api/login` | POST | site password body | Issue session cookie |
-| `/api/logout` | POST | — | Clear session cookie |
-| `/api/me` | GET | cookie / secret | Auth status |
-| `/api/overview` | GET | cookie / secret | Decay + Runway + practice stats |
-| `/api/quiz` | POST/GET | cookie / secret | Start warm-up or fetch session |
-| `/api/drill` | POST/GET | cookie / secret | Typed/reverse/speed drills + grading |
-| `/api/inspect` | GET | cookie / secret | Teaching card: components, similar kanji, sentence, audio |
+| `/` | GET | public | Today — recommended recovery session |
+| `/practice` | GET | public | Focused-session builder |
+| `/session` | GET | public | Unified typed-recall session |
+| `/progress` | GET | public | Recovery summary and level pressure |
+| Legacy practice URLs | GET | public | Redirect into the simplified Practice experience |
+| `/api/overview` | GET | public | Decay + Runway + practice stats |
+| `/api/quiz` | POST/GET | public | Start warm-up or fetch session |
+| `/api/drill` | POST/GET | public | Typed/reverse/speed drills + grading |
+| `/api/inspect` | GET | public | Teaching card: components, similar kanji, sentence, audio, sentences it appears in |
 | `/api/tick` | POST | `X-Cron-Secret` header | Scheduler entry point — check window, fetch WK, nudge if needed |
 | `/api/telegram_webhook` | POST | Telegram IP | `/status` command — on-demand snapshot |
-| `/api/sync` | POST | `X-Cron-Secret` header | Daily WK → Neon sync. `?scope=catalog` refreshes the full catalog (Phase 5) |
-| `/read` | GET | public | Level readings, today's read, pasted text |
+| `/api/sync` | GET/POST | `Authorization: Bearer` or `X-Cron-Secret` | WK → Neon sync. `?scope=catalog` refreshes the catalog and rebuilds the sentence index |
+| `/read` | GET | public | Level readings, today's read, the just-right feed, pasted text |
+| `/read/feed` | GET | public | One sentence with a single unknown word |
 | `/level/N/web` | GET | public | Kanji Web for one level |
-| `/api/read` | GET/POST | public | Readings, dictation, daily read, Kanji Web (`?action=`) |
-| `/api/decay` | GET | cookie / secret | Decay Map — what rotted (Phase 1) |
-| `/api/runway` | GET | cookie / secret | Burn-down plan + recovery date (Phase 3) |
+| `/api/read` | GET/POST | public | Readings, feed, search, dictation, daily read, Kanji Web (`?action=`) |
+| `/api/decay` | GET | public | Decay Map — what rotted (Phase 1) |
+| `/api/runway` | GET | public | Burn-down plan + recovery date (Phase 3) |
 
-Site password for the UI: `SITE_PASSWORD` if set, otherwise `CRON_SECRET`.
+The web UI and these APIs are public. Cron endpoints check `CRON_SECRET` themselves.
 
 
 ## Nudge windows (WIB)
@@ -84,6 +82,17 @@ still needs one successful sync before personalized practice is available.
 
 The bot will only send messages during nudge windows. Outside windows it returns 200 silently.
 
+### Vercel Cron
+
+`vercel.json` schedules the sync. Vercel calls **GET** and sends `Authorization: Bearer $CRON_SECRET`. POST with `X-Cron-Secret` still works, so a cron-job.org job can keep calling the same URLs.
+
+| Job | Path | Schedule | When (WIB) |
+|---|---|---|---|
+| Unlocked snapshot | `/api/sync` | `0 21 * * *` | every day at 04:00 |
+| Full catalog and sentence index | `/api/sync?scope=catalog` | `0 22 * * 0` | Monday at 05:00 |
+
+`api/sync.py` is allowed 300 seconds. The other functions stay at 60. The catalog run rebuilds `reading_sentences` when it finishes. Until that index has rows, `/api/read` answers `409 {"error": "index_missing"}`. An empty catalog is `409 {"error": "catalog_missing"}`.
+
 ### Full catalog (weekly)
 
 Readings and Kanji Web need every level, stored in `wk_catalog`. That table is separate from the unlocked `wk_subjects` snapshot, so locked items stay out of drills and courses. The daily sync does not fill it.
@@ -95,7 +104,7 @@ Readings and Kanji Web need every level, stored in `wk_catalog`. That table is s
 5. **Headers:** `X-Cron-Secret` = `<your CRON_SECRET value>`
 6. **Body:** empty
 
-Run that job once by hand after deploying. Until it succeeds, `/api/read` answers `409 {"error": "catalog_missing"}`.
+The Monday Vercel cron is the job that keeps the catalog fresh. The cron-job.org one above is the same request, if you want a second caller. Run it once by hand after deploying if the index is still empty.
 
 ## Telegram /status command (optional setup)
 
