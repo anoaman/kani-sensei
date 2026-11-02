@@ -61,4 +61,17 @@ export const api = {
     request("/api/course?action=answer", { method: "POST", body: JSON.stringify(body) }),
   inspect: (subjectId) =>
     request(`/api/inspect?subject_id=${encodeURIComponent(subjectId)}`),
+  readIndex: () => request("/api/read"),
+  readLevel: (level) => request(`/api/read?action=level&level=${encodeURIComponent(level)}`),
+  readPassage: (id) => request(`/api/read?action=passage&id=${encodeURIComponent(id)}`),
+  readDaily: () => request("/api/read?action=daily"),
+  kanjiWeb: (level) => request(`/api/read?action=web&level=${encodeURIComponent(level)}`),
+  readLookup: (body) =>
+    request("/api/read?action=lookup", { method: "POST", body: JSON.stringify(body) }),
+  readDictation: (body) =>
+    request("/api/read?action=dictation", { method: "POST", body: JSON.stringify(body) }),
+  readFinish: (body) =>
+    request("/api/read?action=finish", { method: "POST", body: JSON.stringify(body) }),
+  readCustom: (body) =>
+    request("/api/read?action=custom", { method: "POST", body: JSON.stringify(body) }),
 };
