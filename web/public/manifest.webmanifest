@@ -1,0 +1,15 @@
+{
+  "name": "Kani Sensei",
+  "short_name": "Kani",
+  "description": "Re-enter WaniKani without drowning in the pile.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f2ede2",
+  "theme_color": "#f2ede2",
+  "icons": [
+    { "src": "/icons/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
