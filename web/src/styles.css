@@ -604,17 +604,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .web-scroll { overflow-x: auto; margin-top: 18px; }
 .web-wrap { position: relative; min-width: 640px; }
 .web-lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.web-lines path { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.web-lines path { fill: none; stroke: #8d8270; stroke-width: 1.5; }
 .web-lines path.similar { stroke-dasharray: 4 4; }
 .web-lines path.dim { opacity: .12; }
-.web-lanes { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; }
-.web-lane { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.web-lanes { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 36px; }
+.web-lane { display: flex; flex-direction: column; gap: 8px; }
+.web-lane:nth-child(1) { align-items: flex-end; }
+.web-lane:nth-child(2) { align-items: center; }
+.web-lane:nth-child(3) { align-items: flex-start; }
 .web-node {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 1px;
   min-height: 42px;
+  width: max-content;
+  max-width: 100%;
+  min-width: 4.5rem;
   padding: 6px 10px;
   border: 1px solid var(--line);
   border-radius: 4px;
