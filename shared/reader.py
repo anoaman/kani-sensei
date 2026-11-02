@@ -1406,6 +1406,124 @@ def fetch_feed(db, offset=0):
     }
 
 
+def search_needles(query):
+    """The literal query plus its hiragana form, when romaji or katakana was typed."""
+    text = (query or "").strip()
+    if not text:
+        return []
+    text = text[:40]
+    reading = normalize_reading(text)
+    needles = [text]
+    if reading and reading.casefold() != text.casefold():
+        needles.append(reading)
+    return needles
+
+
+def _like_pattern(text):
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def match_rank(needles, item):
+    """Sort key for a catalog hit. None when none of the needles appear."""
+    folded = []
+    for needle in needles or []:
+        if needle and needle not in folded:
+            folded.append(needle)
+    if not folded:
+        return None
+    characters = item.get("characters") or ""
+    meaning = item.get("meaning") or ""
+    meanings = " ".join(str(part) for part in (item.get("meanings") or []) if part)
+    reading_bits = []
+    for reading in item.get("readings") or []:
+        if not reading:
+            continue
+        reading_bits.append(str(reading))
+        reading_bits.append(normalize_reading(str(reading)))
+    readings = " ".join(reading_bits)
+    order = (int(item.get("level") or 0), int(item.get("id") or 0))
+    if any(characters == needle or characters.casefold() == needle.casefold() for needle in folded):
+        return (0, *order)
+    if any(needle and characters.casefold().startswith(needle.casefold()) for needle in folded):
+        return (1, *order)
+    if any(
+        needle.casefold() in characters.casefold()
+        or needle.casefold() in readings.casefold()
+        or normalize_reading(needle).casefold() in readings.casefold()
+        for needle in folded
+    ):
+        return (2, *order)
+    if any(needle.casefold() in meaning.casefold() or needle.casefold() in meanings.casefold() for needle in folded):
+        return (3, *order)
+    return None
+
+
+def search_catalog(db, query, limit=8):
+    """Look up kanji, kana, romaji, or an English meaning in the full catalog."""
+    require_catalog(db)
+    needles = search_needles(query)
+    if not needles:
+        return {"query": "", "results": []}
+    clauses = []
+    args = []
+    for needle in needles:
+        pattern = _like_pattern(needle)
+        clauses.append(
+            "(characters ilike %s escape '\\' or primary_meaning ilike %s escape '\\' "
+            "or meanings::text ilike %s escape '\\' or readings::text ilike %s escape '\\')"
+        )
+        args.extend([pattern, pattern, pattern, pattern])
+    args.append(needles)
+    rows = db.execute(
+        f"""
+        select id, object_type, level, characters, primary_meaning, meanings, readings
+        from wk_catalog
+        where characters is not null and characters <> ''
+          and ({" or ".join(clauses)})
+        order by (characters = any(%s)) desc, char_length(characters), level, id
+        limit 80
+        """,
+        args,
+        fetch=True,
+    )
+    ranked = []
+    for row in rows:
+        meaning_values = _json(row[5], [])
+        meanings = [part for part in meaning_values if isinstance(part, str)] if isinstance(meaning_values, list) else []
+        reading_texts = []
+        for entry in _json(row[6], []):
+            if isinstance(entry, dict) and entry.get("reading"):
+                reading_texts.append(entry["reading"])
+            elif isinstance(entry, str):
+                reading_texts.append(entry)
+        item = {
+            "id": int(row[0]),
+            "type": row[1],
+            "level": int(row[2] or 0),
+            "characters": row[3] or "",
+            "meaning": row[4] or "",
+            "meanings": meanings,
+            "readings": reading_texts,
+        }
+        rank = match_rank(needles, item)
+        if rank is None:
+            continue
+        ranked.append((rank, item))
+    ranked.sort(key=lambda pair: pair[0])
+    results = []
+    for _rank, item in ranked[: int(limit)]:
+        results.append({
+            "id": item["id"],
+            "type": item["type"],
+            "level": item["level"],
+            "characters": item["characters"],
+            "meaning": item["meaning"],
+            "reading": item["readings"][0] if item["readings"] else "",
+        })
+    return {"query": needles[0], "results": results}
+
+
 def record_feed_again(db, subject_id):
     """Again on the feed is a lookup, and a lookup of a started word is a drill miss."""
     require_index(db)

@@ -13,6 +13,8 @@ from shared.reader import (
     kanji_from_radicals,
     plan_level,
     known_ratio,
+    match_rank,
+    search_needles,
     segment,
     unknown_word,
 )
@@ -287,6 +289,31 @@ class ReadinessTests(unittest.TestCase):
         self.assertAlmostEqual(ratio["ratio"], 2 / 3)
         self.assertIsNone(known_ratio([], {}))
         self.assertEqual(known_ratio([4], {})["known"], 0)
+
+
+class SearchTests(unittest.TestCase):
+    def item(self, **kwargs):
+        base = {
+            "id": 1,
+            "level": 5,
+            "characters": "食べる",
+            "meaning": "to eat",
+            "meanings": ["to eat"],
+            "readings": ["たべる"],
+        }
+        base.update(kwargs)
+        return base
+
+    def test_romaji_and_meaning_and_exact_characters(self):
+        eat = self.item()
+        japan = self.item(id=2, level=1, characters="日本", meaning="Japan", meanings=["Japan"], readings=["にほん"])
+        language = self.item(id=3, level=2, characters="日本語", meaning="Japanese", meanings=["Japanese"], readings=["にほんご"])
+        self.assertEqual(search_needles("taberu"), ["taberu", "たべる"])
+        self.assertLess(match_rank(search_needles("日本"), japan), match_rank(search_needles("日本"), language))
+        self.assertEqual(match_rank(search_needles("taberu"), eat)[0], 2)
+        self.assertEqual(match_rank(search_needles("eat"), eat)[0], 3)
+        self.assertIsNone(match_rank(search_needles("xyz"), eat))
+        self.assertEqual(search_needles("   "), [])
 
 
 class QuestionTests(unittest.TestCase):

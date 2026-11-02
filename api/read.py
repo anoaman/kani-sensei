@@ -6,6 +6,7 @@ GET  /api/read?action=passage&id=...   one annotated passage
 GET  /api/read?action=daily            today's read, built on first open
 GET  /api/read?action=web&level=N      Kanji Web for one level
 GET  /api/read?action=feed&offset=N    one just-right sentence
+GET  /api/read?action=search&q=        look up the catalog by kanji, kana, romaji, or meaning
 POST /api/read?action=lookup           {passage_id, subject_id}
 POST /api/read?action=feed             {subject_id}  Again on the feed
 POST /api/read?action=dictation        {passage_id, index, text}
@@ -36,6 +37,7 @@ from shared.reader import (
     render_passage,
     require_index,
     save_custom,
+    search_catalog,
 )
 
 
@@ -77,6 +79,8 @@ class handler(BaseHTTPRequestHandler):
                     body = fetch_web(db, _level(query.get("level", [None])[0]))
                 elif action == "feed":
                     body = fetch_feed(db, query.get("offset", ["0"])[0])
+                elif action == "search":
+                    body = search_catalog(db, query.get("q", [""])[0])
                 else:
                     raise ValueError("unknown action")
             respond(self, 200, body)

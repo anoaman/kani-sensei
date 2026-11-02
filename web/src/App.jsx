@@ -10,6 +10,8 @@ import ReadLevel from "./ReadLevel.jsx";
 import Reader from "./Reader.jsx";
 import KanjiWeb from "./KanjiWeb.jsx";
 import ReadFeed from "./ReadFeed.jsx";
+import SearchBox from "./SearchBox.jsx";
+import { InspectDrawer } from "./InspectCard.jsx";
 
 // /level/N/continue: jump to whatever that level needs most, else its page.
 function ContinueRoute({ level, go }) {
@@ -185,6 +187,7 @@ export default function App() {
   const [focus, setFocus] = useState(false);
   const [customize, setCustomize] = useState(() => wantsCustomize(window.location.pathname));
   const [error, setError] = useState("");
+  const [lookup, setLookup] = useState(null);
 
   async function load() {
     setError("");
@@ -244,6 +247,7 @@ export default function App() {
         <button className="brand-mark" onClick={() => navigate("dojo")}><span className="seal" lang="ja">先</span><strong>Kani Sensei</strong></button>
         {!focus ? (
           <div className="topbar-meta">
+            <SearchBox onOpen={setLookup} />
             <button className="pill-btn" onClick={() => navigate("/read")}>Read</button>
             <button className="pill-btn" onClick={() => navigate("/levels")}>Levels</button>
             <button className="pill-btn" onClick={() => setCustomize(true)}>Customize <kbd className="wide-only">⌘K</kbd></button>
@@ -269,6 +273,7 @@ export default function App() {
         <Reader key={pathname} daily={view === "read-today"} passageId={passageIdFromPath(pathname)} go={navigate} />
       ) : null}
       {customize && !focus ? <Customize data={data} navigate={navigate} onClose={() => setCustomize(false)} /> : null}
+      {lookup ? <InspectDrawer subjectId={lookup} onClose={() => setLookup(null)} /> : null}
     </div>
   );
 }
