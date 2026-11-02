@@ -1,10 +1,14 @@
 import unittest
 
 from shared.reader import (
+    PASSAGE_SIZE,
     align_furigana,
     annotate_sentence,
+    build_level_plan,
     build_lexicon,
+    build_questions,
     grade_dictation,
+    plan_level,
     segment,
 )
 
@@ -119,6 +123,118 @@ class DictationTests(unittest.TestCase):
         self.assertLess(missed["score"], 0.6)
         self.assertEqual(missed["verdict"], "miss")
         self.assertTrue(any(op["op"] == "del" for op in missed["ops"]))
+
+
+class PlanTests(unittest.TestCase):
+    def test_cover_is_complete_and_stable(self):
+        targets = [{"id": item, "lesson_position": item} for item in range(1, 13)]
+        candidates = [
+            {
+                "source_id": 100 + item,
+                "sentence_idx": 0,
+                "ja": f"s{item}",
+                "en": "",
+                "covers": {item},
+                "above_kanji": 0,
+                "length": 10,
+            }
+            for item in range(1, 13)
+        ]
+        # One sentence that covers everything would win, so keep them separate.
+        first = plan_level(targets, candidates)
+        second = plan_level(targets, candidates)
+        self.assertEqual(first, second)
+        self.assertEqual(first["uncovered"], [])
+        self.assertEqual(len(first["passages"]), 2)
+        self.assertEqual(len(first["passages"][0]), PASSAGE_SIZE)
+        covered = set()
+        for chunk in first["passages"]:
+            self.assertLessEqual(len(chunk), PASSAGE_SIZE)
+            for sentence in chunk:
+                covered |= set(sentence["covers"])
+        self.assertEqual(covered, set(range(1, 13)))
+
+    def test_more_coverage_wins_and_ties_break_on_source_id(self):
+        targets = [{"id": 1, "lesson_position": 1}, {"id": 2, "lesson_position": 2}, {"id": 3, "lesson_position": 3}]
+        wide = {"source_id": 9, "sentence_idx": 0, "ja": "wide", "en": "", "covers": {1, 2, 3}, "above_kanji": 0, "length": 10}
+        singles = [
+            {"source_id": 1, "sentence_idx": 0, "ja": "a", "en": "", "covers": {1}, "above_kanji": 0, "length": 10},
+            {"source_id": 2, "sentence_idx": 0, "ja": "b", "en": "", "covers": {2}, "above_kanji": 0, "length": 10},
+            {"source_id": 3, "sentence_idx": 0, "ja": "c", "en": "", "covers": {3}, "above_kanji": 0, "length": 10},
+        ]
+        plan = plan_level(targets, singles + [wide])
+        self.assertEqual(len(plan["chosen"]), 1)
+        self.assertEqual(plan["chosen"][0]["source_id"], 9)
+
+        tied = [
+            {"source_id": 5, "sentence_idx": 1, "ja": "later", "en": "", "covers": {1}, "above_kanji": 0, "length": 10},
+            {"source_id": 2, "sentence_idx": 0, "ja": "earlier", "en": "", "covers": {1}, "above_kanji": 0, "length": 10},
+        ]
+        picked = plan_level([{"id": 1, "lesson_position": 1}], tied)
+        self.assertEqual(picked["chosen"][0]["source_id"], 2)
+
+    def test_higher_level_sentences_only_fill_gaps(self):
+        targets = [{"id": 1, "lesson_position": 1}, {"id": 2, "lesson_position": 2}]
+        primary = [{"source_id": 10, "sentence_idx": 0, "ja": "a", "en": "A", "covers": {1}, "above_kanji": 0, "length": 5}]
+        extra = [{"source_id": 11, "sentence_idx": 0, "ja": "b", "en": "B", "covers": {2}, "above_kanji": 1, "length": 5}]
+        plan = build_level_plan(targets, primary, extra)
+        self.assertEqual(plan["uncovered"], [])
+        self.assertEqual({sentence["source_id"] for sentence in plan["chosen"]}, {10, 11})
+
+
+class QuestionTests(unittest.TestCase):
+    def pool(self):
+        items = [
+            (1, "人", "person", "ひと"),
+            (2, "犬", "dog", "いぬ"),
+            (3, "猫", "cat", "ねこ"),
+            (4, "鳥", "bird", "とり"),
+            (5, "魚", "fish", "さかな"),
+            (6, "馬", "horse", "うま"),
+        ]
+        return [
+            {
+                "id": item_id,
+                "type": "kanji",
+                "level": 1,
+                "characters": characters,
+                "meaning": meaning,
+                "meanings": [meaning],
+                "reading": reading,
+                "readings": [reading],
+            }
+            for item_id, characters, meaning, reading in items
+        ]
+
+    def test_questions_are_deterministic_and_distinct(self):
+        focus = self.pool()[:2]
+        sentences = [
+            {"ja": "人がいる。", "en": "There is a person.", "source_id": 1},
+            {"ja": "犬がいる。", "en": "There is a dog.", "source_id": 2},
+        ]
+        translations = ["There is a cat.", "There is a bird.", "There is a horse.", "There is a fish."]
+        first = build_questions("level:1:1", sentences, focus, self.pool(), translations)
+        second = build_questions("level:1:1", sentences, focus, self.pool(), translations)
+        self.assertEqual(first, second)
+        self.assertEqual({question["type"] for question in first}, {"translation", "meaning", "reading"})
+        for question in first:
+            choices = question.get("choices")
+            if choices:
+                self.assertEqual(len(choices), len(set(choices)))
+                self.assertGreaterEqual(len(choices), 2)
+                self.assertIn(question["answer"], range(len(choices)))
+
+    def test_custom_text_skips_translation(self):
+        questions = build_questions(
+            "custom",
+            [{"ja": "人がいる。", "en": "", "source_id": 1}],
+            self.pool()[:1],
+            self.pool(),
+            [],
+            with_translation=False,
+        )
+        self.assertNotIn("translation", {question["type"] for question in questions})
+        self.assertIn("meaning", {question["type"] for question in questions})
 
 
 if __name__ == "__main__":
