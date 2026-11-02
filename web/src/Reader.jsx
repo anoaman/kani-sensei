@@ -3,6 +3,7 @@ import { toHiragana, toKana } from "wanakana";
 import { api } from "./api.js";
 import { InspectDrawer } from "./InspectCard.jsx";
 import { CatalogNote } from "./ReadIndex.jsx";
+import { hasJapaneseVoice, speak, stop } from "./speech.js";
 
 const FURI_KEY = "kani-furigana";
 
@@ -81,6 +82,163 @@ function Popover({ token, onInspect, onClose }) {
       {token.audio_url ? <button type="button" className="ghost-btn" onClick={play}>Play</button> : null}
       <button type="button" className="ghost-btn" onClick={() => onInspect(token.subject_id)}>Open card</button>
       <button type="button" className="drawer-close" onClick={onClose} aria-label="Close">Esc</button>
+    </div>
+  );
+}
+
+function englishOptions(sentence, sentences, questions) {
+  const correct = (sentence.en || "").trim();
+  if (!correct) return [];
+  const seen = new Set([correct]);
+  const options = [];
+  const bag = [];
+  for (const other of sentences || []) {
+    if (other.en) bag.push(other.en.trim());
+  }
+  for (const question of questions || []) {
+    if (question.type === "translation") bag.push(...(question.choices || []));
+  }
+  for (const item of bag) {
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    options.push(item);
+    if (options.length === 3) break;
+  }
+  const choices = options.concat(correct);
+  // Stable shuffle so the answer isn't always last, without jumping around on re-render.
+  const shift = correct.length % choices.length;
+  return choices.slice(shift).concat(choices.slice(0, shift));
+}
+
+function Diff({ ops }) {
+  if (!ops?.length) return null;
+  return (
+    <p className="read-diff" lang="ja">
+      {ops.map((op, index) => (
+        <span key={index} className={`diff-${op.op}`}>{op.text}</span>
+      ))}
+    </p>
+  );
+}
+
+function ListenRound({ data, furigana, pop, onPick, onInspect, onDone }) {
+  const sentences = data.sentences || [];
+  const [index, setIndex] = useState(0);
+  const [typed, setTyped] = useState("");
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [correct, setCorrect] = useState(0);
+  const [answered, setAnswered] = useState(0);
+  const sentence = sentences[index];
+
+  useEffect(() => () => stop(), []);
+
+  if (!sentence) {
+    return (
+      <div className="read-result">
+        <p className="kicker">Listening</p>
+        <strong>{correct} / {answered}</strong>
+        <button type="button" className="go-btn" onClick={() => onDone(correct, answered)}>Back to the text</button>
+      </div>
+    );
+  }
+
+  const listenable = Boolean(sentence.listenable && sentence.kana);
+  const choices = listenable ? [] : englishOptions(sentence, sentences, data.questions);
+
+  async function gradeTyped(event) {
+    event.preventDefault();
+    if (result || busy) return;
+    setBusy(true);
+    try {
+      const graded = await api.readDictation({
+        passage_id: data.id,
+        index,
+        text: toKana((typed || "").toLowerCase()),
+      });
+      setResult(graded);
+      setAnswered((count) => count + 1);
+      if (graded.verdict === "pass") setCorrect((count) => count + 1);
+    } catch (err) {
+      setResult({ verdict: "miss", error: err.message || "Could not grade" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function gradeChoice(option) {
+    if (result) return;
+    const ok = option === (sentence.en || "").trim();
+    setResult({ verdict: ok ? "pass" : "miss", mc: true, answer: sentence.en });
+    setAnswered((count) => count + 1);
+    if (ok) setCorrect((count) => count + 1);
+  }
+
+  function next() {
+    stop();
+    setIndex((current) => current + 1);
+    setTyped("");
+    setResult(null);
+  }
+
+  return (
+    <div className="read-check">
+      <p className="kicker">Listen · {index + 1} / {sentences.length}</p>
+      <div className="read-listen-actions">
+        <button type="button" className="go-btn" onClick={() => speak(sentence.ja, { rate: 1 })}>Play</button>
+        <button type="button" className="ghost-btn" onClick={() => speak(sentence.ja, { rate: 0.75 })}>Slower</button>
+      </div>
+      {result ? (
+        <article className="read-card">
+          <p className="read-sentence" lang="ja">
+            {(sentence.tokens || []).map((token, tokenIndex) => (
+              <RubyToken
+                key={tokenIndex}
+                token={token}
+                furigana={furigana}
+                open={false}
+                onPick={(item) => onPick(item, `listen-${index}-${tokenIndex}`)}
+              />
+            ))}
+          </p>
+          {pop?.at?.startsWith(`listen-${index}-`) ? (
+            <Popover token={pop} onInspect={onInspect} onClose={() => onPick(null)} />
+          ) : null}
+          {sentence.en ? <p className="read-en">{sentence.en}</p> : null}
+          {result.error ? <p className="error">{result.error}</p> : null}
+          {result.ops ? <Diff ops={result.ops} /> : null}
+          <p className="read-verdict">
+            {result.verdict === "pass" ? "Yes." : result.verdict === "close" ? "Close." : "Not quite."}
+            {result.expected ? <span lang="ja"> {result.expected}</span> : null}
+          </p>
+          <button type="button" className="go-btn" onClick={next}>{index + 1 === sentences.length ? "Finish listening" : "Next"}</button>
+        </article>
+      ) : listenable ? (
+        <form className="read-type" onSubmit={gradeTyped}>
+          <input
+            lang="ja"
+            value={typed}
+            onChange={(event) => setTyped(toKana(event.target.value.toLowerCase()))}
+            placeholder="Type what you heard"
+            aria-label="What you heard"
+            autoCapitalize="off"
+            autoCorrect="off"
+          />
+          <button className="go-btn" type="submit" disabled={busy}>{busy ? "Checking…" : "Check"}</button>
+        </form>
+      ) : choices.length >= 2 ? (
+        <div className="read-choices">
+          <p className="muted">What did you hear?</p>
+          {choices.map((option) => (
+            <button key={option} type="button" className="read-choice" onClick={() => gradeChoice(option)}>{option}</button>
+          ))}
+        </div>
+      ) : (
+        <div>
+          <p className="muted">This sentence has no reading to dictate.</p>
+          <button type="button" className="ghost-btn" onClick={next}>Skip</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -198,6 +356,9 @@ export default function Reader({ daily = false, passageId = "", go }) {
   const [inspect, setInspect] = useState(null);
   const [checking, setChecking] = useState(false);
   const [finished, setFinished] = useState(null);
+  const [mode, setMode] = useState("read");
+  const [voice, setVoice] = useState(false);
+  const [listenScore, setListenScore] = useState({ correct: null, total: null });
   const looked = useRef(new Set());
 
   useEffect(() => {
@@ -223,8 +384,17 @@ export default function Reader({ daily = false, passageId = "", go }) {
     function onKey(event) {
       if (event.key === "Escape") setPop(null);
     }
+    function checkVoice() {
+      setVoice(hasJapaneseVoice());
+    }
+    checkVoice();
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.speechSynthesis?.addEventListener("voiceschanged", checkVoice);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.speechSynthesis?.removeEventListener("voiceschanged", checkVoice);
+      stop();
+    };
   }, []);
 
   function chooseFurigana(mode) {
@@ -237,6 +407,10 @@ export default function Reader({ daily = false, passageId = "", go }) {
   }
 
   function pick(token, at) {
+    if (!token) {
+      setPop(null);
+      return;
+    }
     setPop({ ...token, at });
     if (!token.subject_id || !data?.id || looked.current.has(token.subject_id)) return;
     looked.current.add(token.subject_id);
@@ -249,8 +423,8 @@ export default function Reader({ daily = false, passageId = "", go }) {
         passage_id: data.id,
         quiz_correct: quizCorrect,
         quiz_total: quizTotal,
-        listen_correct: null,
-        listen_total: null,
+        listen_correct: listenScore.correct,
+        listen_total: listenScore.total,
       });
       setFinished(result);
       setChecking(false);
@@ -278,12 +452,21 @@ export default function Reader({ daily = false, passageId = "", go }) {
             {data?.of ? <small> {data.idx} of {data.of}</small> : null}
           </h2>
         </div>
-        <div className="segmented" role="group" aria-label="Furigana">
-          {[["auto", "Auto"], ["all", "All"], ["off", "Off"]].map(([id, label]) => (
-            <button key={id} type="button" className={furigana === id ? "active" : ""} onClick={() => chooseFurigana(id)}>{label}</button>
-          ))}
+        <div className="read-switches">
+          <div className="segmented" role="group" aria-label="Mode">
+            <button type="button" className={mode === "read" ? "active" : ""} onClick={() => { stop(); setMode("read"); }}>Read</button>
+            <button type="button" className={mode === "listen" ? "active" : ""} disabled={!voice} onClick={() => setMode("listen")}>Listen</button>
+          </div>
+          <div className="segmented" role="group" aria-label="Furigana">
+            {[["auto", "Auto"], ["all", "All"], ["off", "Off"]].map(([id, label]) => (
+              <button key={id} type="button" className={furigana === id ? "active" : ""} onClick={() => chooseFurigana(id)}>{label}</button>
+            ))}
+          </div>
         </div>
       </div>
+      {voice ? null : (
+        <p className="read-voice">Listening needs a Japanese voice. On iPhone: Settings → Accessibility → Spoken Content → Voices → Japanese.</p>
+      )}
       {missing ? <CatalogNote /> : null}
       {error ? <div className="error">{error}</div> : null}
       {!data && !missing ? <p className="muted">Opening…</p> : null}
@@ -293,8 +476,24 @@ export default function Reader({ daily = false, passageId = "", go }) {
           {data.coverage?.total ? (
             <p className="muted read-meta">{Math.round((data.coverage.ratio || 0) * 100)}% of level {data.level} read so far</p>
           ) : null}
+          {mode === "listen" ? (
+            <ListenRound
+              key={data.id}
+              data={data}
+              furigana={furigana}
+              pop={pop}
+              onPick={pick}
+              onInspect={setInspect}
+              onDone={(correct, total) => {
+                setListenScore({ correct, total });
+                setMode("read");
+              }}
+            />
+          ) : (
+          <>
           <div className="read-tools">
             <button type="button" className="quiet-link" onClick={() => setRevealAll(true)}>Reveal all English</button>
+            {listenScore.total ? <span className="muted">Listening {listenScore.correct}/{listenScore.total}</span> : null}
           </div>
           <div className="read-body">
             {(data.sentences || []).map((sentence, index) => {
@@ -314,6 +513,9 @@ export default function Reader({ daily = false, passageId = "", go }) {
                   </p>
                   {pop?.at?.startsWith(`${index}-`) ? (
                     <Popover token={pop} onInspect={setInspect} onClose={() => setPop(null)} />
+                  ) : null}
+                  {voice ? (
+                    <button type="button" className="ghost-btn read-play" onClick={() => speak(sentence.ja)}>Play</button>
                   ) : null}
                   {sentence.en ? (
                     englishOn ? (
@@ -343,6 +545,8 @@ export default function Reader({ daily = false, passageId = "", go }) {
             <Check questions={data.questions || []} onFinish={finish} />
           ) : (
             <button type="button" className="go-btn" onClick={() => setChecking(true)}>Check yourself</button>
+          )}
+          </>
           )}
         </>
       ) : null}
