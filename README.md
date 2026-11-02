@@ -4,12 +4,13 @@ A focused WaniKani recovery companion. Kani Sensei turns a large review pile
 into one short recommended session, while still allowing deliberate practice by
 level and subject type.
 
-The product has three user-facing areas:
+The product has four user-facing areas:
 
 - **Today** — one decay-weighted daily prescription and a direct path to WaniKani.
 - **Practice** — choose a single level or range, Kanji/Vocabulary/Radicals/Mixed,
   and a 10–40 question session.
 - **Progress** — recovery summary and the levels under the most pressure.
+- **Read** — level readings built from WaniKani's example sentences, a daily read, listening, and a Kanji Web for each level.
 
 Ghosts, leeches, due items, and prior misses remain part of the drill engine,
 but are no longer separate destinations competing for attention.
@@ -32,7 +33,10 @@ but are no longer separate destinations competing for attention.
 | `/api/inspect` | GET | cookie / secret | Teaching card: components, similar kanji, sentence, audio |
 | `/api/tick` | POST | `X-Cron-Secret` header | Scheduler entry point — check window, fetch WK, nudge if needed |
 | `/api/telegram_webhook` | POST | Telegram IP | `/status` command — on-demand snapshot |
-| `/api/sync` | POST | `X-Cron-Secret` header | Daily WK → Neon sync (Phase 0) |
+| `/api/sync` | POST | `X-Cron-Secret` header | Daily WK → Neon sync. `?scope=catalog` refreshes the full catalog (Phase 5) |
+| `/read` | GET | public | Level readings, today's read, pasted text |
+| `/level/N/web` | GET | public | Kanji Web for one level |
+| `/api/read` | GET/POST | public | Readings, dictation, daily read, Kanji Web (`?action=`) |
 | `/api/decay` | GET | cookie / secret | Decay Map — what rotted (Phase 1) |
 | `/api/runway` | GET | cookie / secret | Burn-down plan + recovery date (Phase 3) |
 
@@ -79,6 +83,19 @@ still needs one successful sync before personalized practice is available.
 7. Save and enable
 
 The bot will only send messages during nudge windows. Outside windows it returns 200 silently.
+
+### Full catalog (weekly)
+
+Readings and Kanji Web need every level, stored in `wk_catalog`. That table is separate from the unlocked `wk_subjects` snapshot, so locked items stay out of drills and courses. The daily sync does not fill it.
+
+1. Create a second cronjob on [cron-job.org](https://cron-job.org)
+2. **URL:** `https://kani-sensei.vercel.app/api/sync?scope=catalog`
+3. **Method:** POST
+4. **Schedule:** once a week (custom: `0 3 * * 0`)
+5. **Headers:** `X-Cron-Secret` = `<your CRON_SECRET value>`
+6. **Body:** empty
+
+Run that job once by hand after deploying. Until it succeeds, `/api/read` answers `409 {"error": "catalog_missing"}`.
 
 ## Telegram /status command (optional setup)
 
