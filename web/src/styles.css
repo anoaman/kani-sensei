@@ -528,6 +528,22 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .read-passage { cursor: pointer; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .read-passage.done strong { color: var(--ok); }
 .read-card { margin-top: 12px; }
+.read.size-s .read-sentence { font-size: 18px; }
+.read.size-l .read-sentence { font-size: 30px; }
+.read.is-vertical .read-body {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: flex-start;
+  gap: 12px;
+  overflow-x: auto;
+}
+.read.is-vertical .read-card {
+  writing-mode: vertical-rl;
+  max-height: 70vh;
+  width: max-content;
+  margin-top: 0;
+}
+.read-card.is-speaking { border-color: var(--ink); background: #fff; }
 .read-sentence { margin: 0; font-family: var(--jp); font-size: 22px; line-height: 2.35; }
 .read-token, .read-plain, .read-punct { font: inherit; }
 .read-token {

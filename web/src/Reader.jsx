@@ -6,6 +6,25 @@ import { CatalogNote } from "./ReadIndex.jsx";
 import { hasJapaneseVoice, speak, stop } from "./speech.js";
 
 const FURI_KEY = "kani-furigana";
+const SIZE_KEY = "kani-text-size";
+const VERTICAL_KEY = "kani-vertical";
+
+function readChoice(key, allowed, fallback) {
+  try {
+    const value = localStorage.getItem(key);
+    return allowed.includes(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function storeChoice(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* private mode */
+  }
+}
 
 function readFurigana() {
   try {
@@ -464,6 +483,9 @@ export default function Reader({ daily = false, passageId = "", go }) {
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState("");
   const [furigana, setFurigana] = useState(readFurigana);
+  const [textSize, setTextSize] = useState(() => readChoice(SIZE_KEY, ["s", "m", "l"], "m"));
+  const [vertical, setVertical] = useState(() => readChoice(VERTICAL_KEY, ["on", "off"], "off") === "on");
+  const [speaking, setSpeaking] = useState(null);
   const [revealed, setRevealed] = useState({});
   const [revealAll, setRevealAll] = useState(false);
   const [pop, setPop] = useState(null);
@@ -475,6 +497,7 @@ export default function Reader({ daily = false, passageId = "", go }) {
   const [listenScore, setListenScore] = useState({ correct: null, total: null });
   const [recallScore, setRecallScore] = useState({ correct: null, total: null });
   const looked = useRef(new Set());
+  const playToken = useRef(0);
 
   useEffect(() => {
     setData(null);
@@ -508,14 +531,46 @@ export default function Reader({ daily = false, passageId = "", go }) {
     return () => {
       window.removeEventListener("keydown", onKey);
       window.speechSynthesis?.removeEventListener("voiceschanged", checkVoice);
+      playToken.current += 1;
       stop();
     };
   }, []);
 
+  function haltSpeech() {
+    playToken.current += 1;
+    setSpeaking(null);
+    stop();
+  }
+
+  async function playAll() {
+    const sentences = data?.sentences || [];
+    const token = playToken.current + 1;
+    playToken.current = token;
+    for (let index = 0; index < sentences.length; index += 1) {
+      if (playToken.current !== token) return;
+      setSpeaking(index);
+      await speak(sentences[index].ja, { rate: 1 });
+    }
+    if (playToken.current === token) setSpeaking(null);
+  }
+
+  async function shadow(index) {
+    const sentence = data?.sentences?.[index];
+    if (!sentence) return;
+    const token = playToken.current + 1;
+    playToken.current = token;
+    for (let time = 0; time < 3; time += 1) {
+      if (playToken.current !== token) return;
+      setSpeaking(index);
+      await speak(sentence.ja, { rate: 0.75 });
+    }
+    if (playToken.current === token) setSpeaking(null);
+  }
+
   function chooseFurigana(mode) {
     setFurigana(mode);
     try {
-      localStorage.setItem(FURI_KEY, mode);
+      storeChoice(FURI_KEY, mode);
     } catch {
       /* private mode */
     }
@@ -565,7 +620,7 @@ export default function Reader({ daily = false, passageId = "", go }) {
         : "Reading";
 
   return (
-    <section className="panel read">
+    <section className={`panel read size-${textSize}${vertical ? " is-vertical" : ""}`}>
       <div className="section-head level-head">
         <div>
           <button type="button" className="quiet-link" onClick={() => go(data?.level ? `/read/level/${data.level}` : "/read")}>← Readings</button>
@@ -577,9 +632,34 @@ export default function Reader({ daily = false, passageId = "", go }) {
         </div>
         <div className="read-switches">
           <div className="segmented" role="group" aria-label="Mode">
-            <button type="button" className={mode === "read" ? "active" : ""} onClick={() => { stop(); setMode("read"); }}>Read</button>
-            <button type="button" className={mode === "listen" ? "active" : ""} disabled={!voice} onClick={() => { stop(); setMode("listen"); }}>Listen</button>
-            <button type="button" className={mode === "recall" ? "active" : ""} onClick={() => { stop(); setMode("recall"); }}>Recall</button>
+            <button type="button" className={mode === "read" ? "active" : ""} onClick={() => { haltSpeech(); setMode("read"); }}>Read</button>
+            <button type="button" className={mode === "listen" ? "active" : ""} disabled={!voice} onClick={() => { haltSpeech(); setMode("listen"); }}>Listen</button>
+            <button type="button" className={mode === "recall" ? "active" : ""} onClick={() => { haltSpeech(); setMode("recall"); }}>Recall</button>
+          </div>
+          <div className="segmented" role="group" aria-label="Text size">
+            {[["s", "S"], ["m", "M"], ["l", "L"]].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                className={textSize === id ? "active" : ""}
+                onClick={() => { setTextSize(id); storeChoice(SIZE_KEY, id); }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="segmented" role="group" aria-label="Text direction">
+            <button
+              type="button"
+              className={vertical ? "active" : ""}
+              onClick={() => {
+                const next = !vertical;
+                setVertical(next);
+                storeChoice(VERTICAL_KEY, next ? "on" : "off");
+              }}
+            >
+              Vertical
+            </button>
           </div>
           <div className="segmented" role="group" aria-label="Furigana">
             {[["auto", "Auto"], ["all", "All"], ["off", "Off"]].map(([id, label]) => (
@@ -631,6 +711,9 @@ export default function Reader({ daily = false, passageId = "", go }) {
           <>
           <div className="read-tools">
             <button type="button" className="quiet-link" onClick={() => setRevealAll(true)}>Reveal all English</button>
+            {voice ? (
+              <button type="button" className="quiet-link" onClick={playAll}>Play all</button>
+            ) : null}
             {listenScore.total ? <span className="muted">Listening {listenScore.correct}/{listenScore.total}</span> : null}
             {recallScore.total ? <span className="muted">Recall {recallScore.correct}/{recallScore.total}</span> : null}
           </div>
@@ -638,7 +721,7 @@ export default function Reader({ daily = false, passageId = "", go }) {
             {(data.sentences || []).map((sentence, index) => {
               const englishOn = revealAll || revealed[index];
               return (
-                <article key={index} className="read-card">
+                <article key={index} className={speaking === index ? "read-card is-speaking" : "read-card"}>
                   <p className="read-sentence" lang="ja">
                     {(sentence.tokens || []).map((token, tokenIndex) => (
                       <RubyToken
@@ -654,7 +737,10 @@ export default function Reader({ daily = false, passageId = "", go }) {
                     <Popover token={pop} onInspect={setInspect} onClose={() => setPop(null)} />
                   ) : null}
                   {voice ? (
-                    <button type="button" className="ghost-btn read-play" onClick={() => speak(sentence.ja)}>Play</button>
+                    <div className="read-listen-actions">
+                      <button type="button" className="ghost-btn read-play" onClick={() => { haltSpeech(); speak(sentence.ja); }}>Play</button>
+                      <button type="button" className="ghost-btn" onClick={() => shadow(index)}>Shadow</button>
+                    </div>
                   ) : null}
                   {sentence.en ? (
                     englishOn ? (
