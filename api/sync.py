@@ -23,7 +23,11 @@ from shared.auth import query_params
 from shared.cache import clear as clear_cache
 from shared.wanikani_client import WaniKaniClient
 from shared.neon import NeonClient
-from shared.reader import ensure_schema as ensure_reader_schema, map_catalog_item
+from shared.reader import (
+    ensure_schema as ensure_reader_schema,
+    map_catalog_item,
+    rebuild_sentence_index,
+)
 
 CHUNK = 100
 CATALOG_CHUNK = 1000
@@ -249,11 +253,11 @@ def run_catalog_sync(wk_token, db):
         for start in range(0, len(rows), CATALOG_CHUNK):
             batch = rows[start:start + CATALOG_CHUNK]
             db.execute(CATALOG_UPSERT, [json.dumps(batch, ensure_ascii=False)])
-        counts = {"catalog": len(rows)}
+        clear_cache()
+        counts = {"catalog": len(rows), "sentences": rebuild_sentence_index(db)}
         db.execute(
             "update sync_runs set status='ok', finished_at=%s, counts=%s::jsonb where id=%s",
             [_now_iso(), json.dumps(counts), run_id])
-        clear_cache()
         return counts
     except Exception as e:
         try:

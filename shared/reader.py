@@ -88,6 +88,32 @@ SCHEMA_STATEMENTS = (
         updated_at      timestamptz
     )
     """,
+    """
+    create table if not exists reading_sentences (
+        source_id   bigint not null,
+        idx         integer not null,
+        ja          text not null,
+        en          text not null default '',
+        level       integer not null,
+        word_ids    bigint[] not null default '{}',
+        kanji_ids   bigint[] not null default '{}',
+        max_level   integer not null,
+        listenable  boolean not null default false,
+        primary key (source_id, idx)
+    )
+    """,
+    """
+    create index if not exists reading_sentences_words_idx
+        on reading_sentences using gin (word_ids)
+    """,
+    """
+    create index if not exists reading_sentences_kanji_idx
+        on reading_sentences using gin (kanji_ids)
+    """,
+    """
+    create index if not exists reading_sentences_max_level_idx
+        on reading_sentences (max_level)
+    """,
 )
 
 _SCHEMA_READY = False
@@ -99,7 +125,9 @@ def ensure_schema(db):
     if _SCHEMA_READY:
         return
     try:
-        if db.has_relation("public.wk_catalog"):
+        # Key off the newest table. wk_catalog already exists in production,
+        # and an early return there would skip every later CREATE.
+        if db.has_relation("public.reading_sentences"):
             _SCHEMA_READY = True
             return
     except Exception:
@@ -713,6 +741,10 @@ class CatalogMissing(LookupError):
     """wk_catalog has not been synced yet."""
 
 
+class IndexMissing(LookupError):
+    """reading_sentences has not been built yet."""
+
+
 def _norm(text):
     return (text or "").strip().casefold()
 
@@ -1089,6 +1121,148 @@ def catalog_ready(db):
 def require_catalog(db):
     if not catalog_ready(db):
         raise CatalogMissing("catalog_missing")
+
+
+def index_rows_for_subject(subject, lexicon):
+    """One reading_sentences row per context sentence of a catalog subject.
+
+    word_ids are matched vocabulary, in order, without duplicates. kanji_ids
+    include standalone kanji and the kanji inside those words. max_level is
+    the highest matched token, or the source level when nothing matched.
+    """
+    sentences = subject.get("context_sentences")
+    if sentences is None:
+        sentences = subject.get("sentences") or []
+    source_id = int(subject["id"])
+    source_level = int(subject.get("level") or 0)
+    rows = []
+    for idx, sentence in enumerate(sentences or []):
+        if isinstance(sentence, str):
+            ja, en = sentence.strip(), ""
+        elif isinstance(sentence, dict):
+            ja = (sentence.get("ja") or "").strip()
+            en = (sentence.get("en") or "").strip()
+        else:
+            continue
+        if not ja:
+            continue
+        annotated = annotate_sentence(ja, lexicon, prefer=source_id)
+        word_ids = []
+        seen_words = set()
+        kanji_ids = []
+        seen_kanji = set()
+        levels = []
+
+        def _take_kanji(char):
+            entry = lexicon.kanji.get(char)
+            if not entry:
+                return
+            kanji_id = int(entry["id"])
+            if kanji_id in seen_kanji:
+                return
+            seen_kanji.add(kanji_id)
+            kanji_ids.append(kanji_id)
+            if entry.get("level") is not None:
+                levels.append(int(entry["level"]))
+
+        for token in annotated["tokens"]:
+            subject_id = token.get("subject_id")
+            if token["kind"] == "word" and subject_id is not None:
+                word_id = int(subject_id)
+                if word_id not in seen_words:
+                    seen_words.add(word_id)
+                    word_ids.append(word_id)
+                if token.get("level") is not None:
+                    levels.append(int(token["level"]))
+                for char in token.get("text") or "":
+                    if is_kanji(char):
+                        _take_kanji(char)
+            elif token["kind"] == "kanji" and subject_id is not None:
+                kanji_id = int(subject_id)
+                if kanji_id not in seen_kanji:
+                    seen_kanji.add(kanji_id)
+                    kanji_ids.append(kanji_id)
+                if token.get("level") is not None:
+                    levels.append(int(token["level"]))
+        rows.append({
+            "source_id": source_id,
+            "idx": idx,
+            "ja": ja,
+            "en": en,
+            "level": source_level,
+            "word_ids": word_ids,
+            "kanji_ids": kanji_ids,
+            "max_level": max(levels) if levels else source_level,
+            "listenable": bool(annotated["listenable"]),
+        })
+    return rows
+
+
+SENTENCE_CHUNK = 1000
+
+_SENTENCE_UPSERT = """
+insert into reading_sentences
+    (source_id, idx, ja, en, level, word_ids, kanji_ids, max_level, listenable)
+select source_id, idx, ja, en, level, word_ids, kanji_ids, max_level, listenable
+from jsonb_to_recordset(%s::jsonb) as row(
+    source_id bigint,
+    idx integer,
+    ja text,
+    en text,
+    level integer,
+    word_ids bigint[],
+    kanji_ids bigint[],
+    max_level integer,
+    listenable boolean
+)
+on conflict (source_id, idx) do update set
+    ja = excluded.ja,
+    en = excluded.en,
+    level = excluded.level,
+    word_ids = excluded.word_ids,
+    kanji_ids = excluded.kanji_ids,
+    max_level = excluded.max_level,
+    listenable = excluded.listenable
+"""
+
+
+def rebuild_sentence_index(db):
+    """Replace reading_sentences from every catalog context sentence. One pass."""
+    ensure_schema(db)
+    lexicon = load_lexicon(db)
+    rows = db.execute(
+        """
+        select id, level, context_sentences
+        from wk_catalog
+        where context_sentences <> '[]'::jsonb
+        """,
+        fetch=True,
+    )
+    indexed = []
+    for source_id, level, sentences in rows:
+        indexed.extend(index_rows_for_subject(
+            {"id": int(source_id), "level": int(level or 0), "context_sentences": _json(sentences, [])},
+            lexicon,
+        ))
+    db.execute("truncate reading_sentences")
+    for start in range(0, len(indexed), SENTENCE_CHUNK):
+        batch = indexed[start:start + SENTENCE_CHUNK]
+        db.execute(_SENTENCE_UPSERT, [json.dumps(batch, ensure_ascii=False)])
+    return len(indexed)
+
+
+def sentence_index_ready(db):
+    ensure_schema(db)
+    if not _has(db, "public.reading_sentences"):
+        return False
+    rows = db.execute("select 1 from reading_sentences limit 1", fetch=True)
+    return bool(rows)
+
+
+def require_index(db):
+    require_catalog(db)
+    if not sentence_index_ready(db):
+        raise IndexMissing("index_missing")
 
 
 def user_level(db):

@@ -4,7 +4,7 @@ import { api } from "./api.js";
 export function CatalogNote() {
   return (
     <div className="error">
-      Readings need the full WaniKani catalog. After this is deployed, run the catalog sync once
+      Readings need the full WaniKani catalog and its sentence index. Run the catalog sync once
       (<code>POST /api/sync?scope=catalog</code> with the <code>X-Cron-Secret</code> header), then reload.
     </div>
   );

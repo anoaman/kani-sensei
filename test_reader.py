@@ -9,6 +9,7 @@ from shared.reader import (
     build_lexicon,
     build_questions,
     grade_dictation,
+    index_rows_for_subject,
     kanji_from_radicals,
     plan_level,
     segment,
@@ -213,6 +214,55 @@ class PlanTests(unittest.TestCase):
         ]
         chosen = [item["id"] for item in kanji_from_radicals(radicals, kanji, 19)]
         self.assertEqual(chosen, [10, 12])
+
+
+class SentenceIndexTests(unittest.TestCase):
+    def lexicon(self):
+        return build_lexicon([
+            entry(id=1, characters="食べる", meaning="to eat", reading="たべる",
+                  parts_of_speech=["ichidan verb"], level=5),
+            entry(id=2, type="kanji", characters="食", meaning="eat", reading="た", level=4),
+            entry(id=3, characters="日本", meaning="Japan", reading="にほん", level=2),
+            entry(id=4, type="kanji", characters="日", meaning="day", reading="にち", level=1),
+            entry(id=5, type="kanji", characters="本", meaning="book", reading="ほん", level=1),
+            entry(id=6, type="kanji", characters="仮", meaning="temporary", reading="かり", level=9),
+        ])
+
+    def test_rows_keep_words_kanji_and_the_highest_level(self):
+        rows = index_rows_for_subject({
+            "id": 1,
+            "level": 5,
+            "context_sentences": [
+                {"ja": "", "en": "blank"},
+                {"ja": "日本で食べました。", "en": "I ate in Japan."},
+                {"ja": "仮", "en": "temporary"},
+            ],
+        }, self.lexicon())
+        self.assertEqual([row["idx"] for row in rows], [1, 2])
+        eaten = rows[0]
+        self.assertEqual(eaten["source_id"], 1)
+        self.assertEqual(eaten["level"], 5)
+        self.assertEqual(eaten["en"], "I ate in Japan.")
+        self.assertEqual(eaten["word_ids"], [3, 1])
+        self.assertEqual(eaten["kanji_ids"], [4, 5, 2])
+        self.assertEqual(eaten["max_level"], 5)
+        self.assertTrue(eaten["listenable"])
+        lone = rows[1]
+        self.assertEqual(lone["word_ids"], [])
+        self.assertEqual(lone["kanji_ids"], [6])
+        self.assertEqual(lone["max_level"], 9)
+        self.assertTrue(lone["listenable"])
+
+    def test_unmatched_sentence_keeps_the_source_level(self):
+        rows = index_rows_for_subject(
+            {"id": 8, "level": 3, "sentences": ["？？"]},
+            build_lexicon([]),
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["word_ids"], [])
+        self.assertEqual(rows[0]["kanji_ids"], [])
+        self.assertEqual(rows[0]["max_level"], 3)
+        self.assertEqual(rows[0]["idx"], 0)
 
 
 class QuestionTests(unittest.TestCase):

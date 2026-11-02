@@ -22,6 +22,7 @@ from shared.kanji_web import fetch_web
 from shared.neon import NeonClient
 from shared.reader import (
     CatalogMissing,
+    IndexMissing,
     build_daily_read,
     fetch_index,
     fetch_level_view,
@@ -29,6 +30,7 @@ from shared.reader import (
     grade_passage_dictation,
     note_lookup,
     render_passage,
+    require_index,
     save_custom,
 )
 
@@ -55,6 +57,7 @@ class handler(BaseHTTPRequestHandler):
         try:
             db = self._db()
             with db.reuse():
+                require_index(db)
                 if action == "index":
                     body = fetch_index(db)
                 elif action == "level":
@@ -73,6 +76,8 @@ class handler(BaseHTTPRequestHandler):
             respond(self, 200, body)
         except CatalogMissing:
             respond(self, 409, {"error": "catalog_missing"})
+        except IndexMissing:
+            respond(self, 409, {"error": "index_missing"})
         except (TypeError, ValueError) as exc:
             respond(self, 400, {"error": str(exc)})
         except Exception as exc:
@@ -86,6 +91,7 @@ class handler(BaseHTTPRequestHandler):
             body = read_json_body(self)
             db = self._db()
             with db.reuse():
+                require_index(db)
                 passage_id = body.get("passage_id")
                 if action == "lookup":
                     if not passage_id or body.get("subject_id") is None:
@@ -113,6 +119,8 @@ class handler(BaseHTTPRequestHandler):
             respond(self, 200, result)
         except CatalogMissing:
             respond(self, 409, {"error": "catalog_missing"})
+        except IndexMissing:
+            respond(self, 409, {"error": "index_missing"})
         except (TypeError, ValueError, KeyError) as exc:
             respond(self, 400, {"error": str(exc)})
         except Exception as exc:
