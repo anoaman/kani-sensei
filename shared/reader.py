@@ -975,6 +975,43 @@ def split_passage_text(text):
     return parts[:MAX_CUSTOM_SENTENCES]
 
 
+def kanji_from_radicals(radicals, kanji, max_level):
+    """Kanji at or below max_level that these radicals build.
+
+    A kanji counts when a radical lists it in amalgamation_ids, or the kanji
+    lists that radical in component_ids.
+    """
+    radical_ids = {int(item["id"]) for item in radicals or [] if item.get("id") is not None}
+    listed = set()
+    for item in radicals or []:
+        for child in item.get("amalgamation_ids") or []:
+            try:
+                listed.add(int(child))
+            except (TypeError, ValueError):
+                continue
+    chosen = []
+    for item in kanji or []:
+        if item.get("type") not in (None, "kanji"):
+            continue
+        try:
+            level = int(item.get("level") or 0)
+            subject_id = int(item["id"])
+        except (TypeError, ValueError):
+            continue
+        if level > int(max_level):
+            continue
+        components = set()
+        for part in item.get("component_ids") or []:
+            try:
+                components.add(int(part))
+            except (TypeError, ValueError):
+                continue
+        if subject_id in listed or components & radical_ids:
+            chosen.append(item)
+    chosen.sort(key=lambda item: (int(item.get("level") or 0), int(item["id"])))
+    return chosen
+
+
 def candidates_from_rows(rows, lexicon, target_ids, reference_level):
     found = []
     seen = set()
@@ -1684,8 +1721,48 @@ def _vocab_containing(db, low, high, characters, exclude_ids):
     return [_catalog_item(row) for row in rows]
 
 
+def _kanji_built_from(db, radical_ids, max_level):
+    radical_ids = [int(item) for item in radical_ids or []]
+    if not radical_ids:
+        return []
+    radical_rows = db.execute(
+        "select id, amalgamation_ids from wk_catalog where id = any(%s) and object_type = 'radical'",
+        [radical_ids],
+        fetch=True,
+    )
+    radicals = [
+        {"id": int(row[0]), "amalgamation_ids": [int(item) for item in (row[1] or [])]}
+        for row in radical_rows
+    ]
+    listed = sorted({int(child) for item in radicals for child in item["amalgamation_ids"]})
+    rows = db.execute(
+        """
+        select id, object_type, level, characters, primary_meaning, meanings, readings,
+               context_sentences, lesson_position, component_ids
+        from wk_catalog
+        where object_type = 'kanji'
+          and level <= %s
+          and characters is not null and characters <> ''
+          and (id = any(%s) or component_ids && %s::bigint[])
+        order by level, lesson_position nulls last, id
+        """,
+        [max_level, listed or [0], radical_ids],
+        fetch=True,
+    )
+    kanji = []
+    for row in rows:
+        item = _catalog_item(row[:9])
+        item["component_ids"] = [int(part) for part in (row[9] or [])]
+        kanji.append(item)
+    return kanji_from_radicals(radicals, kanji, max_level)
+
+
 def build_daily_read(db):
-    """One passage from today's set, frozen for the WIB day. Radicals-only sets are empty."""
+    """One passage from today's set, frozen for the WIB day.
+
+    A radicals-only set is read through the kanji those radicals build.
+    Empty only when nothing usable turns up.
+    """
     from shared.daily import fetch_daily, today as wib_today
 
     require_catalog(db)
@@ -1699,10 +1776,14 @@ def build_daily_read(db):
     subject_ids = [int(item) for item in ((rows[0][0] if rows else []) or [])]
     items = _items_with_sentences(db, subject_ids)
     targets = [item for item in items if item["type"] in TARGET_TYPES]
+    reached = user_level(db)
+    title = "Today's read"
+    if not targets:
+        radical_ids = [item["id"] for item in items if item.get("type") == "radical"]
+        targets = _kanji_built_from(db, radical_ids, reached)
+        title = "Built from today's radicals"
     if not targets:
         return {"empty": True, "id": passage_id, "day": day.isoformat(), "kind": "daily"}
-
-    reached = user_level(db)
     lexicon = load_lexicon(db)
     target_ids = {item["id"] for item in targets}
     primary = candidates_from_rows(
@@ -1728,7 +1809,7 @@ def build_daily_read(db):
         {"ja": candidate["ja"], "en": candidate["en"], "source_id": candidate["source_id"]}
         for candidate in chunk
     ]
-    _insert_passage(db, passage_id, "daily", reached, day, 1, "Today's read", sentences, covers)
+    _insert_passage(db, passage_id, "daily", reached, day, 1, title, sentences, covers)
     return render_passage(db, passage_id)
 
 

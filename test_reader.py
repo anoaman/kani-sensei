@@ -9,6 +9,7 @@ from shared.reader import (
     build_lexicon,
     build_questions,
     grade_dictation,
+    kanji_from_radicals,
     plan_level,
     segment,
 )
@@ -200,6 +201,18 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(len(plan["chosen"]), DAILY_SENTENCES)
         self.assertEqual(len(plan["passages"]), 1)
         self.assertTrue(plan["uncovered"])
+
+    def test_radical_day_keeps_kanji_the_radicals_build(self):
+        radicals = [{"id": 1, "amalgamation_ids": [10, 11]}]
+        kanji = [
+            {"id": 10, "type": "kanji", "level": 2, "component_ids": [1]},
+            {"id": 11, "type": "kanji", "level": 30, "component_ids": [1]},
+            {"id": 12, "type": "kanji", "level": 5, "component_ids": [1, 9]},
+            {"id": 13, "type": "kanji", "level": 4, "component_ids": [8]},
+            {"id": 14, "type": "vocabulary", "level": 2, "component_ids": [1]},
+        ]
+        chosen = [item["id"] for item in kanji_from_radicals(radicals, kanji, 19)]
+        self.assertEqual(chosen, [10, 12])
 
 
 class QuestionTests(unittest.TestCase):
