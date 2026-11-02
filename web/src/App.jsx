@@ -5,6 +5,10 @@ import Gate from "./Gate.jsx";
 import CourseSession from "./CourseSession.jsx";
 import { LevelIndex, LevelPage } from "./LevelPages.jsx";
 import Home from "./Home.jsx";
+import ReadIndex from "./ReadIndex.jsx";
+import ReadLevel from "./ReadLevel.jsx";
+import Reader from "./Reader.jsx";
+import KanjiWeb from "./KanjiWeb.jsx";
 
 // /level/N/continue: jump to whatever that level needs most, else its page.
 function ContinueRoute({ level, go }) {
@@ -42,9 +46,33 @@ function viewFromPath(pathname) {
   if (pathname.startsWith("/levels")) return "levels";
   if (pathname.startsWith("/today")) return "today";
   if (pathname.startsWith("/gate")) return "gate";
+  if (pathname.startsWith("/read/today")) return "read-today";
+  if (pathname.startsWith("/read/level/")) return "read-level";
+  if (pathname.startsWith("/read/p/")) return "read-passage";
+  if (pathname === "/read" || pathname.startsWith("/read/")) return "read";
+  if (/^\/level\/\d+\/web\/?$/.test(pathname)) return "web";
   const match = pathname.match(/^\/level\/(\d+)(?:\/(check|relearn|reviews|ahead|continue))?/);
   if (match) return match[2] ? (match[2] === "continue" ? "continue" : "course") : "level";
   return "dojo";
+}
+
+function readLevelFromPath(pathname) {
+  const match = pathname.match(/^\/read\/level\/(\d+)/);
+  return match ? Math.max(1, Math.min(60, Number(match[1]))) : 1;
+}
+
+function passageIdFromPath(pathname) {
+  if (!pathname.startsWith("/read/p/")) return "";
+  try {
+    return decodeURIComponent(pathname.slice("/read/p/".length));
+  } catch {
+    return pathname.slice("/read/p/".length);
+  }
+}
+
+function webLevelFromPath(pathname) {
+  const match = pathname.match(/^\/level\/(\d+)\/web/);
+  return match ? Math.max(1, Math.min(60, Number(match[1]))) : 1;
 }
 
 function levelFromPath(pathname) {
@@ -214,6 +242,7 @@ export default function App() {
         <button className="brand-mark" onClick={() => navigate("dojo")}><span className="seal" lang="ja">先</span><strong>Kani Sensei</strong></button>
         {!focus ? (
           <div className="topbar-meta">
+            <button className="pill-btn" onClick={() => navigate("/read")}>Read</button>
             <button className="pill-btn" onClick={() => navigate("/levels")}>Levels</button>
             <button className="pill-btn" onClick={() => setCustomize(true)}>Customize <kbd className="wide-only">⌘K</kbd></button>
           </div>
@@ -230,6 +259,12 @@ export default function App() {
       {view === "gate" ? <Gate go={navigate} /> : null}
       {view === "today" ? <CourseSession key={pathname} daily go={navigate} onFocus={setFocus} /> : null}
       {view === "continue" ? <ContinueRoute key={pathname} level={levelFromPath(pathname)} go={navigate} /> : null}
+      {view === "read" ? <ReadIndex go={navigate} /> : null}
+      {view === "read-level" ? <ReadLevel key={pathname} level={readLevelFromPath(pathname)} go={navigate} /> : null}
+      {view === "web" ? <KanjiWeb key={pathname} level={webLevelFromPath(pathname)} go={navigate} /> : null}
+      {view === "read-passage" || view === "read-today" ? (
+        <Reader key={pathname} daily={view === "read-today"} passageId={passageIdFromPath(pathname)} go={navigate} />
+      ) : null}
       {customize && !focus ? <Customize data={data} navigate={navigate} onClose={() => setCustomize(false)} /> : null}
     </div>
   );

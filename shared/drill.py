@@ -545,6 +545,12 @@ def _parse_json(value):
     return list(value)
 
 
+def record_lookup(db, subject_id):
+    """A looked-up word in a reading counts as a miss, so drills bring it back."""
+    ensure_schema(db)
+    _record_miss(db, int(subject_id), False, "reading", "")
+
+
 def _record_miss(db, subject_id, is_correct, prompt_type, submitted):
     if is_correct:
         db.execute(

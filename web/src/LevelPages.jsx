@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api.js";
-import InspectCard from "./InspectCard.jsx";
+import { InspectDrawer } from "./InspectCard.jsx";
 
 const GROUPS = [
   ["radical", "Radicals"],
@@ -32,35 +32,6 @@ export function whenLabel(iso) {
   const minutes = Math.round((diff % 3600000) / 60000);
   if (hours < 24) return hours ? `in ${hours}h ${minutes}m` : `in ${minutes}m`;
   return at.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
-}
-
-function InspectDrawer({ subjectId, onClose }) {
-  const [card, setCard] = useState(null);
-  const [current, setCurrent] = useState(subjectId);
-  useEffect(() => setCurrent(subjectId), [subjectId]);
-  useEffect(() => {
-    if (!current) return;
-    setCard(null);
-    // Drop the old WaniKani SRS label; the tile already shows course state.
-    api.inspect(current).then((data) => setCard({ ...data, srs_name: null })).catch(() => setCard(null));
-  }, [current]);
-  useEffect(() => {
-    const onKey = (event) => event.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  if (!subjectId) return null;
-  return (
-    <div className="drawer-scrim" onClick={onClose}>
-      <aside className="drawer" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-        <div className="drawer-head">
-          <div><p className="kicker">Item</p></div>
-          <button className="drawer-close" onClick={onClose} aria-label="Close">Esc</button>
-        </div>
-        {card ? <InspectCard card={card} onOpenRelated={setCurrent} /> : <p className="muted">Loading…</p>}
-      </aside>
-    </div>
-  );
 }
 
 export function LevelIndex({ go }) {
@@ -185,6 +156,8 @@ export function LevelPage({ level, go }) {
         </div>
         <div className="level-nav">
           {level > 1 ? <button className="ghost-btn" onClick={() => go(`/level/${level - 1}`)}>← {level - 1}</button> : null}
+          <button className="ghost-btn" onClick={() => go(`/read/level/${level}`)}>Read</button>
+          <button className="ghost-btn" onClick={() => go(`/level/${level}/web`)}>Kanji web</button>
           <button className="ghost-btn" onClick={() => go(`/session?min=${level}&max=${level}&count=10&types=radical,kanji,vocabulary&pool=decay&go=1`)}>Quick drill</button>
           {level < 60 ? <button className="ghost-btn" onClick={() => go(`/level/${level + 1}`)}>{level + 1} →</button> : null}
         </div>

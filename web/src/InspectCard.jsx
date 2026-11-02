@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { api } from "./api.js";
 import { ReadingTerm, SrsTerm, T } from "./Term.jsx";
 
 function GlyphChip({ item, onOpen }) {
@@ -148,6 +149,35 @@ export default function InspectCard({ card, onOpenRelated }) {
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+export function InspectDrawer({ subjectId, onClose }) {
+  const [card, setCard] = useState(null);
+  const [current, setCurrent] = useState(subjectId);
+  useEffect(() => setCurrent(subjectId), [subjectId]);
+  useEffect(() => {
+    if (!current) return;
+    setCard(null);
+    api.inspect(current).then((data) => setCard({ ...data, srs_name: null })).catch(() => setCard(null));
+  }, [current]);
+  useEffect(() => {
+    if (!subjectId) return undefined;
+    const onKey = (event) => event.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [subjectId, onClose]);
+  if (!subjectId) return null;
+  return (
+    <div className="drawer-scrim" onClick={onClose}>
+      <aside className="drawer" role="dialog" aria-modal="true" aria-label="Item" onClick={(event) => event.stopPropagation()}>
+        <div className="drawer-head">
+          <div><p className="kicker">Item</p></div>
+          <button className="drawer-close" onClick={onClose} aria-label="Close">Esc</button>
+        </div>
+        {card ? <InspectCard card={card} onOpenRelated={setCurrent} /> : <p className="muted">Loading…</p>}
+      </aside>
     </div>
   );
 }
