@@ -9,7 +9,7 @@ GET  /api/read?action=feed&offset=N    one just-right sentence
 POST /api/read?action=lookup           {passage_id, subject_id}
 POST /api/read?action=feed             {subject_id}  Again on the feed
 POST /api/read?action=dictation        {passage_id, index, text}
-POST /api/read?action=finish           {passage_id, quiz_correct, quiz_total, listen_correct, listen_total}
+POST /api/read?action=finish           {passage_id, quiz_correct, quiz_total, listen_correct, listen_total, recall_correct, recall_total}
 POST /api/read?action=custom           {text, title?}
 """
 
@@ -117,6 +117,8 @@ class handler(BaseHTTPRequestHandler):
                         body.get("quiz_total"),
                         body.get("listen_correct"),
                         body.get("listen_total"),
+                        body.get("recall_correct"),
+                        body.get("recall_total"),
                     )
                 elif action == "custom":
                     result = save_custom(db, body.get("text"), body.get("title"))

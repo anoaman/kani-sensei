@@ -85,6 +85,8 @@ SCHEMA_STATEMENTS = (
         quiz_total      integer,
         listen_correct  integer,
         listen_total    integer,
+        recall_correct  integer,
+        recall_total    integer,
         updated_at      timestamptz
     )
     """,
@@ -116,6 +118,16 @@ SCHEMA_STATEMENTS = (
     """,
 )
 
+# Runs even when the tables already exist. CREATE TABLE is skipped in that case,
+# so new columns have to be added on their own.
+SCHEMA_ALTERS = (
+    """
+    alter table reading_progress
+        add column if not exists recall_correct integer,
+        add column if not exists recall_total integer
+    """,
+)
+
 _SCHEMA_READY = False
 
 
@@ -124,15 +136,17 @@ def ensure_schema(db):
     global _SCHEMA_READY
     if _SCHEMA_READY:
         return
+    ready = False
     try:
         # Key off the newest table. wk_catalog already exists in production,
         # and an early return there would skip every later CREATE.
-        if db.has_relation("public.reading_sentences"):
-            _SCHEMA_READY = True
-            return
+        ready = bool(db.has_relation("public.reading_sentences"))
     except Exception:
-        pass
-    for statement in SCHEMA_STATEMENTS:
+        ready = False
+    if not ready:
+        for statement in SCHEMA_STATEMENTS:
+            db.execute(statement)
+    for statement in SCHEMA_ALTERS:
         db.execute(statement)
     _SCHEMA_READY = True
 
@@ -2183,7 +2197,16 @@ def grade_passage_dictation(db, passage_id, index, text):
     return graded
 
 
-def finish_passage(db, passage_id, quiz_correct, quiz_total, listen_correct, listen_total):
+def finish_passage(
+    db,
+    passage_id,
+    quiz_correct,
+    quiz_total,
+    listen_correct,
+    listen_total,
+    recall_correct=None,
+    recall_total=None,
+):
     row = _passage_tuple(db, passage_id)
     if not row:
         raise ValueError("passage not found")
@@ -2200,22 +2223,35 @@ def finish_passage(db, passage_id, quiz_correct, quiz_total, listen_correct, lis
     quiz_total = _count(quiz_total)
     listen_correct = _count(listen_correct)
     listen_total = _count(listen_total)
+    recall_correct = _count(recall_correct)
+    recall_total = _count(recall_total)
     db.execute(
         """
         insert into reading_progress (
           passage_id, opened_at, finished_at,
-          quiz_correct, quiz_total, listen_correct, listen_total, updated_at
+          quiz_correct, quiz_total, listen_correct, listen_total,
+          recall_correct, recall_total, updated_at
         )
-        values (%s, now(), now(), %s, %s, %s, %s, now())
+        values (%s, now(), now(), %s, %s, %s, %s, %s, %s, now())
         on conflict (passage_id) do update set
           finished_at = coalesce(reading_progress.finished_at, now()),
           quiz_correct = excluded.quiz_correct,
           quiz_total = excluded.quiz_total,
           listen_correct = excluded.listen_correct,
           listen_total = excluded.listen_total,
+          recall_correct = excluded.recall_correct,
+          recall_total = excluded.recall_total,
           updated_at = now()
         """,
-        [passage_id, quiz_correct, quiz_total, listen_correct, listen_total],
+        [
+            passage_id,
+            quiz_correct,
+            quiz_total,
+            listen_correct,
+            listen_total,
+            recall_correct,
+            recall_total,
+        ],
     )
     clear_cache()
     kind = row[1]

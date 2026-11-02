@@ -49,5 +49,7 @@ create table if not exists reading_progress (
     quiz_total      integer,
     listen_correct  integer,
     listen_total    integer,
+    recall_correct  integer,
+    recall_total    integer,
     updated_at      timestamptz
 );

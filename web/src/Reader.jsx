@@ -243,6 +243,120 @@ function ListenRound({ data, furigana, pop, onPick, onInspect, onDone }) {
   );
 }
 
+function recallSlots(sentences) {
+  const slots = [];
+  (sentences || []).forEach((sentence, sentenceIndex) => {
+    (sentence.tokens || []).forEach((token, tokenIndex) => {
+      const accepted = token.readings?.length ? token.readings : (token.reading ? [token.reading] : []);
+      if (token.target && accepted.length) {
+        slots.push({ sentenceIndex, tokenIndex, token, accepted });
+      }
+    });
+  });
+  return slots;
+}
+
+function RecallRound({ data, furigana, onMiss, onScore }) {
+  const slots = recallSlots(data.sentences);
+  const [index, setIndex] = useState(0);
+  const [typed, setTyped] = useState("");
+  const [verdict, setVerdict] = useState(null);
+  const [correct, setCorrect] = useState(0);
+  const slot = slots[index];
+
+  if (!slots.length) {
+    return (
+      <div className="read-result">
+        <p className="kicker">Recall</p>
+        <strong>No target words in this reading.</strong>
+        <button type="button" className="go-btn" onClick={() => onScore(0, 0, true)}>Back to the text</button>
+      </div>
+    );
+  }
+
+  if (!slot) {
+    return (
+      <div className="read-result">
+        <p className="kicker">Recall</p>
+        <strong>{correct} / {slots.length}</strong>
+        <button type="button" className="go-btn" onClick={() => onScore(correct, slots.length, true)}>Back to the text</button>
+      </div>
+    );
+  }
+
+  function grade(event) {
+    event.preventDefault();
+    if (verdict) return;
+    const ok = readingMatches(typed, slot.accepted);
+    const nextCorrect = correct + (ok ? 1 : 0);
+    setVerdict(ok ? "pass" : "miss");
+    setCorrect(nextCorrect);
+    if (!ok) onMiss(slot.token.subject_id);
+    onScore(nextCorrect, index + 1);
+  }
+
+  function next() {
+    setIndex((current) => current + 1);
+    setTyped("");
+    setVerdict(null);
+  }
+
+  return (
+    <div className="read-check">
+      <p className="kicker">Recall · {index + 1} / {slots.length}</p>
+      {(data.sentences || []).map((sentence, sentenceIndex) => (
+        <article key={sentenceIndex} className="read-card">
+          <p className="read-sentence" lang="ja">
+            {(sentence.tokens || []).map((token, tokenIndex) => {
+              const slotIndex = slots.findIndex(
+                (item) => item.sentenceIndex === sentenceIndex && item.tokenIndex === tokenIndex,
+              );
+              const revealed = slotIndex > -1 && (slotIndex < index || (slotIndex === index && verdict));
+              if (slotIndex > -1 && !revealed) {
+                const current = slotIndex === index;
+                return (
+                  <span key={tokenIndex} className={current ? "read-blank is-current" : "read-blank"} aria-label="Blank">
+                    ＿
+                  </span>
+                );
+              }
+              return (
+                <RubyToken
+                  key={tokenIndex}
+                  token={token}
+                  furigana={slotIndex === index && verdict === "miss" ? "all" : furigana}
+                  open={false}
+                  onPick={() => {}}
+                />
+              );
+            })}
+          </p>
+        </article>
+      ))}
+      {verdict ? (
+        <div className="read-verdict">
+          <p>{verdict === "pass" ? "Yes." : "Not quite."}</p>
+          {verdict === "miss" ? <p lang="ja">{slot.accepted.join("、")}</p> : null}
+          <button type="button" className="go-btn" onClick={next}>{index + 1 === slots.length ? "Finish recall" : "Next"}</button>
+        </div>
+      ) : (
+        <form className="read-type" onSubmit={grade}>
+          <input
+            lang="ja"
+            value={typed}
+            onChange={(event) => setTyped(toKana(event.target.value.toLowerCase()))}
+            placeholder="Reading"
+            aria-label="Reading of the blank"
+            autoCapitalize="off"
+            autoCorrect="off"
+          />
+          <button className="go-btn" type="submit">Check</button>
+        </form>
+      )}
+    </div>
+  );
+}
+
 function Check({ questions, onFinish }) {
   const [index, setIndex] = useState(0);
   const [choice, setChoice] = useState(null);
@@ -359,6 +473,7 @@ export default function Reader({ daily = false, passageId = "", go }) {
   const [mode, setMode] = useState("read");
   const [voice, setVoice] = useState(false);
   const [listenScore, setListenScore] = useState({ correct: null, total: null });
+  const [recallScore, setRecallScore] = useState({ correct: null, total: null });
   const looked = useRef(new Set());
 
   useEffect(() => {
@@ -406,6 +521,12 @@ export default function Reader({ daily = false, passageId = "", go }) {
     }
   }
 
+  function missRecall(subjectId) {
+    if (!subjectId || !data?.id || looked.current.has(subjectId)) return;
+    looked.current.add(subjectId);
+    api.readLookup({ passage_id: data.id, subject_id: subjectId }).catch(() => {});
+  }
+
   function pick(token, at) {
     if (!token) {
       setPop(null);
@@ -425,6 +546,8 @@ export default function Reader({ daily = false, passageId = "", go }) {
         quiz_total: quizTotal,
         listen_correct: listenScore.correct,
         listen_total: listenScore.total,
+        recall_correct: recallScore.correct,
+        recall_total: recallScore.total,
       });
       setFinished(result);
       setChecking(false);
@@ -455,7 +578,8 @@ export default function Reader({ daily = false, passageId = "", go }) {
         <div className="read-switches">
           <div className="segmented" role="group" aria-label="Mode">
             <button type="button" className={mode === "read" ? "active" : ""} onClick={() => { stop(); setMode("read"); }}>Read</button>
-            <button type="button" className={mode === "listen" ? "active" : ""} disabled={!voice} onClick={() => setMode("listen")}>Listen</button>
+            <button type="button" className={mode === "listen" ? "active" : ""} disabled={!voice} onClick={() => { stop(); setMode("listen"); }}>Listen</button>
+            <button type="button" className={mode === "recall" ? "active" : ""} onClick={() => { stop(); setMode("recall"); }}>Recall</button>
           </div>
           <div className="segmented" role="group" aria-label="Furigana">
             {[["auto", "Auto"], ["all", "All"], ["off", "Off"]].map(([id, label]) => (
@@ -489,11 +613,23 @@ export default function Reader({ daily = false, passageId = "", go }) {
                 setMode("read");
               }}
             />
+          ) : mode === "recall" ? (
+            <RecallRound
+              key={data.id}
+              data={data}
+              furigana={furigana}
+              onMiss={missRecall}
+              onScore={(correct, total, done) => {
+                setRecallScore({ correct, total });
+                if (done) setMode("read");
+              }}
+            />
           ) : (
           <>
           <div className="read-tools">
             <button type="button" className="quiet-link" onClick={() => setRevealAll(true)}>Reveal all English</button>
             {listenScore.total ? <span className="muted">Listening {listenScore.correct}/{listenScore.total}</span> : null}
+            {recallScore.total ? <span className="muted">Recall {recallScore.correct}/{recallScore.total}</span> : null}
           </div>
           <div className="read-body">
             {(data.sentences || []).map((sentence, index) => {
