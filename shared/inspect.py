@@ -269,6 +269,45 @@ def _card_from_catalog_row(db, row):
     )
 
 
+def sentence_sightings(db, subject_id):
+    """How often this subject shows up in the sentence index, plus two examples."""
+    try:
+        if not db.has_relation("public.reading_sentences"):
+            return None
+    except Exception:
+        return None
+    subject_id = int(subject_id)
+    counted = db.execute(
+        """
+        select count(*) from reading_sentences
+        where word_ids @> ARRAY[%s]::bigint[]
+           or kanji_ids @> ARRAY[%s]::bigint[]
+        """,
+        [subject_id, subject_id],
+        fetch=True,
+    )
+    rows = db.execute(
+        """
+        select ja, en from reading_sentences
+        where word_ids @> ARRAY[%s]::bigint[]
+           or kanji_ids @> ARRAY[%s]::bigint[]
+        order by level, source_id, idx
+        limit 2
+        """,
+        [subject_id, subject_id],
+        fetch=True,
+    )
+    return {
+        "count": int(counted[0][0] if counted else 0),
+        "examples": [{"ja": ja, "en": en or ""} for ja, en in rows],
+    }
+
+
+def _with_sightings(db, card):
+    card["sightings"] = sentence_sightings(db, card["subject_id"])
+    return card
+
+
 def fetch_inspect(db, subject_id):
     rows = db.execute(
         """
@@ -290,10 +329,10 @@ def fetch_inspect(db, subject_id):
             + _ids(parsed, "visually_similar_subject_ids")
             + _ids(parsed, "amalgamation_subject_ids")
         )
-        return build_inspect_card(
+        return _with_sightings(db, build_inspect_card(
             sid, object_type, characters, slug, meaning, meanings_raw, readings_raw,
             parsed, level=level, srs_stage=srs_stage, related=_lookup_related(db, ids),
-        )
+        ))
     if db.has_relation("public.wk_catalog"):
         catalog = db.execute(
             """
@@ -309,5 +348,5 @@ def fetch_inspect(db, subject_id):
             fetch=True,
         )
         if catalog:
-            return _card_from_catalog_row(db, catalog[0])
+            return _with_sightings(db, _card_from_catalog_row(db, catalog[0]))
     raise ValueError("subject not found")

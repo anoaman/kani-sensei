@@ -63,7 +63,11 @@ export default function ReadLevel({ level, go }) {
                   onClick={() => go(`/read/p/${encodeURIComponent(passage.id)}`)}
                 >
                   <strong>{passage.title}</strong>
-                  <span>{passage.sentences} sentences{passage.finished ? " · read" : passage.opened ? " · started" : ""}</span>
+                  <span>
+                    {passage.sentences} sentences
+                    {passage.known?.total ? ` · You know ${Math.round(passage.known.ratio * 100)}% of the words` : ""}
+                    {passage.finished ? " · read" : passage.opened ? " · started" : ""}
+                  </span>
                   {passage.finished ? <em>✓</em> : null}
                 </button>
               ))}

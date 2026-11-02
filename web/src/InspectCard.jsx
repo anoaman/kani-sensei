@@ -113,6 +113,15 @@ export default function InspectCard({ card, onOpenRelated }) {
         </div>
       ) : null}
 
+      {card.sightings?.count ? (
+        <div className="sentence">
+          <span className="chip-label">Seen in {card.sightings.count} sentences</span>
+          {(card.sightings.examples || []).map((example) => (
+            <div key={example.ja} className="sentence-ja" lang="ja">{example.ja}</div>
+          ))}
+        </div>
+      ) : null}
+
       {sentence ? (
         <div className="sentence">
           <div className="sentence-ja">{sentence.ja}</div>

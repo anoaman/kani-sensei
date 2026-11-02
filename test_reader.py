@@ -12,6 +12,7 @@ from shared.reader import (
     index_rows_for_subject,
     kanji_from_radicals,
     plan_level,
+    known_ratio,
     segment,
     unknown_word,
 )
@@ -276,6 +277,16 @@ class FeedTests(unittest.TestCase):
         self.assertIsNone(unknown_word([1, 4], levels, {1: 5}, 19))
         self.assertIsNone(unknown_word([], levels, stages, 19))
         self.assertEqual(unknown_word([1, 2], levels, {1: 5}, 19), 2)
+
+
+class ReadinessTests(unittest.TestCase):
+    def test_known_ratio_counts_each_word_once(self):
+        ratio = known_ratio([1, 1, 2, 3], {1: 5, 2: 4, 3: 9})
+        self.assertEqual(ratio["known"], 2)
+        self.assertEqual(ratio["total"], 3)
+        self.assertAlmostEqual(ratio["ratio"], 2 / 3)
+        self.assertIsNone(known_ratio([], {}))
+        self.assertEqual(known_ratio([4], {})["known"], 0)
 
 
 class QuestionTests(unittest.TestCase):

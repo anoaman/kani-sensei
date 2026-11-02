@@ -1455,6 +1455,69 @@ def load_lexicon(db):
     return lexicon
 
 
+def known_ratio(word_ids, stages):
+    """Share of distinct words at Guru or above. None when there is nothing to count."""
+    unique = []
+    seen = set()
+    for word_id in word_ids or []:
+        if word_id is None:
+            continue
+        word_id = int(word_id)
+        if word_id in seen:
+            continue
+        seen.add(word_id)
+        unique.append(word_id)
+    if not unique:
+        return None
+    known = 0
+    for word_id in unique:
+        stage = (stages or {}).get(word_id, 0) or 0
+        try:
+            stage = int(stage)
+        except (TypeError, ValueError):
+            stage = 0
+        if stage >= GURU:
+            known += 1
+    return {"known": known, "total": len(unique), "ratio": known / len(unique)}
+
+
+def known_for_groups(db, groups):
+    """Known-word ratio for each group of saved sentences, from the index."""
+    wanted = []
+    for group in groups or []:
+        for sentence in group or []:
+            source_id = sentence.get("source_id") if isinstance(sentence, dict) else None
+            ja = sentence.get("ja") if isinstance(sentence, dict) else None
+            if source_id and ja:
+                wanted.append((int(source_id), ja))
+    by_key = {}
+    if wanted and _has(db, "public.reading_sentences"):
+        rows = db.execute(
+            """
+            select source_id, ja, word_ids
+            from reading_sentences
+            where source_id = any(%s)
+            """,
+            [sorted({source_id for source_id, _ja in wanted})],
+            fetch=True,
+        )
+        for source_id, ja, word_ids in rows:
+            bucket = by_key.setdefault((int(source_id), ja), [])
+            bucket.extend(int(item) for item in (word_ids or []))
+    grouped = []
+    flat = []
+    for group in groups or []:
+        ids = []
+        for sentence in group or []:
+            if not isinstance(sentence, dict) or not sentence.get("source_id") or not sentence.get("ja"):
+                continue
+            ids.extend(by_key.get((int(sentence["source_id"]), sentence["ja"]), []))
+        grouped.append(ids)
+        flat.extend(ids)
+    stages = fetch_stages(db, flat)
+    return [known_ratio(ids, stages) for ids in grouped]
+
+
 def fetch_stages(db, ids):
     ids = sorted({int(item) for item in ids if item is not None})
     stages = {}
@@ -1873,6 +1936,7 @@ def render_passage(db, passage_id, mark_opened=True):
         "questions": questions,
         "progress": progress,
         "reference_level": reference,
+        "known": known_for_groups(db, [sentences])[0],
     }
 
 
@@ -1895,18 +1959,23 @@ def fetch_level_view(db, level):
         fetch=True,
     )
     passages = []
+    sentence_groups = []
     covered = set()
     for passage_id, idx, title, sentences_raw, covers_raw, opened, finished in rows:
         covers = [int(item) for item in (covers_raw or [])]
         covered.update(covers)
+        sentence_rows = _json(sentences_raw, [])
+        sentence_groups.append(sentence_rows)
         passages.append({
             "id": passage_id,
             "idx": int(idx) if idx else None,
             "title": title,
-            "sentences": len(_json(sentences_raw, [])),
+            "sentences": len(sentence_rows),
             "opened": bool(opened),
             "finished": bool(finished),
         })
+    for passage, known in zip(passages, known_for_groups(db, sentence_groups)):
+        passage["known"] = known
     items = _level_items(db, level)
     uncovered = [
         {"id": item["id"], "characters": item["characters"], "meaning": item["meaning"], "type": item["type"]}

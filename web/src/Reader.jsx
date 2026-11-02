@@ -600,6 +600,9 @@ export default function Reader({ daily = false, passageId = "", go }) {
           {data.coverage?.total ? (
             <p className="muted read-meta">{Math.round((data.coverage.ratio || 0) * 100)}% of level {data.level} read so far</p>
           ) : null}
+          {data.known?.total ? (
+            <p className="muted read-meta">You know {Math.round(data.known.ratio * 100)}% of the words</p>
+          ) : null}
           {mode === "listen" ? (
             <ListenRound
               key={data.id}
