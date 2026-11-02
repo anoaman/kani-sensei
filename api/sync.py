@@ -17,10 +17,14 @@ import json
 from datetime import datetime, timezone
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from shared.auth import query_params
+from shared.cache import clear as clear_cache
 from shared.wanikani_client import WaniKaniClient
 from shared.neon import NeonClient
+from shared.reader import ensure_schema as ensure_reader_schema, map_catalog_item
 
 CHUNK = 100
+CATALOG_CHUNK = 1000
 
 
 UPSERT_SUBJECT = """
@@ -178,6 +182,87 @@ def run_sync(wk_token, db):
         raise
 
 
+CATALOG_UPSERT = """
+insert into wk_catalog (
+    id, object_type, level, characters, slug, primary_meaning,
+    meanings, readings, parts_of_speech, context_sentences,
+    component_ids, amalgamation_ids, similar_ids,
+    audio_url, lesson_position, synced_at
+)
+select * from jsonb_to_recordset(%s::jsonb) as x(
+    id bigint,
+    object_type text,
+    level integer,
+    characters text,
+    slug text,
+    primary_meaning text,
+    meanings jsonb,
+    readings jsonb,
+    parts_of_speech jsonb,
+    context_sentences jsonb,
+    component_ids bigint[],
+    amalgamation_ids bigint[],
+    similar_ids bigint[],
+    audio_url text,
+    lesson_position integer,
+    synced_at timestamptz
+)
+on conflict (id) do update set
+    object_type = excluded.object_type,
+    level = excluded.level,
+    characters = excluded.characters,
+    slug = excluded.slug,
+    primary_meaning = excluded.primary_meaning,
+    meanings = excluded.meanings,
+    readings = excluded.readings,
+    parts_of_speech = excluded.parts_of_speech,
+    context_sentences = excluded.context_sentences,
+    component_ids = excluded.component_ids,
+    amalgamation_ids = excluded.amalgamation_ids,
+    similar_ids = excluded.similar_ids,
+    audio_url = excluded.audio_url,
+    lesson_position = excluded.lesson_position,
+    synced_at = excluded.synced_at
+"""
+
+
+def run_catalog_sync(wk_token, db):
+    """Full subject catalog, levels 1–60, into wk_catalog. Does not touch wk_subjects."""
+    wk = WaniKaniClient(wk_token)
+    now = _now_iso()
+    ensure_reader_schema(db)
+
+    run_id = db.execute(
+        "insert into sync_runs (started_at, status) values (%s, 'running') returning id",
+        [now],
+        fetch=True,
+    )[0][0]
+
+    try:
+        rows = []
+        for item in wk.get_subjects():
+            mapped = map_catalog_item(item, now)
+            if mapped:
+                rows.append(mapped)
+        for start in range(0, len(rows), CATALOG_CHUNK):
+            batch = rows[start:start + CATALOG_CHUNK]
+            db.execute(CATALOG_UPSERT, [json.dumps(batch, ensure_ascii=False)])
+        counts = {"catalog": len(rows)}
+        db.execute(
+            "update sync_runs set status='ok', finished_at=%s, counts=%s::jsonb where id=%s",
+            [_now_iso(), json.dumps(counts), run_id])
+        clear_cache()
+        return counts
+    except Exception as e:
+        try:
+            db.execute(
+                "update sync_runs set status='error', finished_at=%s, error=%s where id=%s",
+                [_now_iso(), str(e), run_id])
+        except Exception:
+            pass
+        raise
+
+
 def last_good_sync(db):
     rows = db.execute(
         """
@@ -209,6 +294,11 @@ class handler(BaseHTTPRequestHandler):
             self._respond(401, {"error": "unauthorized"})
             return
 
+        scope = (query_params(self.path).get("scope", [""])[0] or "").lower()
+        if scope not in ("", "daily", "catalog"):
+            self._respond(400, {"error": "unknown scope"})
+            return
+
         db = NeonClient(database_url)
         if not wk_token:
             try:
@@ -223,7 +313,7 @@ class handler(BaseHTTPRequestHandler):
             return
 
         try:
-            counts = run_sync(wk_token, db)
+            counts = run_catalog_sync(wk_token, db) if scope == "catalog" else run_sync(wk_token, db)
         except Exception as e:
             print(f"[kani-sensei/sync] sync failed: {e}", file=sys.stderr)
             try:
