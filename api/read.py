@@ -5,7 +5,9 @@ GET  /api/read?action=level&level=N    passages for one level
 GET  /api/read?action=passage&id=...   one annotated passage
 GET  /api/read?action=daily            today's read, built on first open
 GET  /api/read?action=web&level=N      Kanji Web for one level
+GET  /api/read?action=feed&offset=N    one just-right sentence
 POST /api/read?action=lookup           {passage_id, subject_id}
+POST /api/read?action=feed             {subject_id}  Again on the feed
 POST /api/read?action=dictation        {passage_id, index, text}
 POST /api/read?action=finish           {passage_id, quiz_correct, quiz_total, listen_correct, listen_total}
 POST /api/read?action=custom           {text, title?}
@@ -26,9 +28,11 @@ from shared.reader import (
     build_daily_read,
     fetch_index,
     fetch_level_view,
+    fetch_feed,
     finish_passage,
     grade_passage_dictation,
     note_lookup,
+    record_feed_again,
     render_passage,
     require_index,
     save_custom,
@@ -71,6 +75,8 @@ class handler(BaseHTTPRequestHandler):
                     body = build_daily_read(db)
                 elif action == "web":
                     body = fetch_web(db, _level(query.get("level", [None])[0]))
+                elif action == "feed":
+                    body = fetch_feed(db, query.get("offset", ["0"])[0])
                 else:
                     raise ValueError("unknown action")
             respond(self, 200, body)
@@ -114,6 +120,10 @@ class handler(BaseHTTPRequestHandler):
                     )
                 elif action == "custom":
                     result = save_custom(db, body.get("text"), body.get("title"))
+                elif action == "feed":
+                    if body.get("subject_id") is None:
+                        raise ValueError("subject_id is required")
+                    result = record_feed_again(db, body.get("subject_id"))
                 else:
                     raise ValueError("unknown action")
             respond(self, 200, result)

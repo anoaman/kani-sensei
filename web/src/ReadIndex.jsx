@@ -50,6 +50,12 @@ export default function ReadIndex({ go }) {
       {!data && !missing ? <p className="muted">Loading…</p> : null}
       {data ? (
         <>
+          <button type="button" className="today-read" onClick={() => go("/read/feed")}>
+            <p className="kicker">Just right</p>
+            <strong>One new word at a time</strong>
+            <span>A sentence you can almost read</span>
+          </button>
+
           <button type="button" className="today-read" onClick={() => go("/read/today")}>
             <p className="kicker">Today's read</p>
             <strong>{data.daily?.finished ? "✓ Read for today" : "Read today's words in context"}</strong>

@@ -1265,6 +1265,150 @@ def require_index(db):
         raise IndexMissing("index_missing")
 
 
+def unknown_word(word_ids, levels_by_id, stages, user_level):
+    """The single below-Guru word, when every word is in levels 1..user_level.
+
+    A missing stage counts as unknown. Any other count, or a word outside
+    that range, is not a just-right sentence. fetch_feed's SQL matches this.
+    """
+    if not word_ids:
+        return None
+    unknown = None
+    ceiling = int(user_level)
+    for word_id in word_ids:
+        word_id = int(word_id)
+        level = levels_by_id.get(word_id)
+        if level is None or int(level) < 1 or int(level) > ceiling:
+            return None
+        stage = stages.get(word_id, 0) if stages else 0
+        try:
+            stage = int(stage or 0)
+        except (TypeError, ValueError):
+            stage = 0
+        if stage < GURU:
+            if unknown is not None:
+                return None
+            unknown = word_id
+    return unknown
+
+
+def _stage_source_sql(db):
+    """Course stage overrides the WaniKani assignment, matching fetch_stages."""
+    parts = []
+    if _has(db, "public.wk_assignments"):
+        parts.append("select subject_id, srs_stage, 1 as src from wk_assignments")
+    if _has(db, "public.course_items"):
+        parts.append("select subject_id, srs_stage, 2 as src from course_items")
+    if not parts:
+        return "select null::bigint as subject_id, 0::int as srs_stage where false"
+    joined = " union all ".join(parts)
+    return (
+        "select distinct on (subject_id) subject_id, srs_stage "
+        f"from ({joined}) raw order by subject_id, src desc"
+    )
+
+
+def fetch_feed(db, offset=0):
+    """One just-right sentence for today. Order is seeded by the WIB day."""
+    from shared.daily import today as wib_today
+
+    require_index(db)
+    try:
+        offset = int(offset or 0)
+    except (TypeError, ValueError):
+        raise ValueError("offset must be a number")
+    if offset < 0:
+        raise ValueError("offset must be zero or more")
+    reached = user_level(db)
+    day = wib_today()
+    seed = day.isoformat()
+    picked = f"""
+        select s.source_id, s.idx, s.ja, s.en, s.word_ids, u.unknown_id
+        from reading_sentences s
+        join lateral (
+            select
+                count(*) as seen,
+                count(*) filter (where c.level < 1 or c.level > %s) as above,
+                count(*) filter (where coalesce(st.srs_stage, 0) < {GURU}) as unknown_count,
+                (array_agg(w.word_id order by w.ord)
+                    filter (where coalesce(st.srs_stage, 0) < {GURU}))[1] as unknown_id
+            from unnest(s.word_ids) with ordinality as w(word_id, ord)
+            join wk_catalog c on c.id = w.word_id
+            left join stage st on st.subject_id = w.word_id
+        ) u on u.seen = cardinality(s.word_ids)
+           and u.above = 0
+           and u.unknown_count = 1
+        where s.max_level between 1 and %s
+          and cardinality(s.word_ids) >= 1
+    """
+    sql = f"""
+        with stage as ({_stage_source_sql(db)}),
+        picked as ({picked})
+        select source_id, idx, ja, en, word_ids, unknown_id, count(*) over () as total
+        from picked
+        order by md5(source_id::text || ':' || idx::text || ':' || %s)
+        offset %s
+        limit 1
+    """
+    rows = db.execute(sql, [reached, reached, seed, offset], fetch=True)
+    if not rows:
+        total = db.execute(
+            f"with stage as ({_stage_source_sql(db)}), picked as ({picked}) select count(*) from picked",
+            [reached, reached],
+            fetch=True,
+        )
+        return {
+            "empty": True,
+            "day": seed,
+            "offset": offset,
+            "total": int(total[0][0] if total else 0),
+        }
+    source_id, idx, ja, en, word_ids, unknown_id, total = rows[0]
+    unknown_id = int(unknown_id)
+    lexicon = load_lexicon(db)
+    annotated = annotate_sentence(
+        ja,
+        lexicon,
+        prefer=int(source_id),
+        stages=fetch_stages(db, [int(item) for item in (word_ids or [])] + [unknown_id]),
+        reference_level=reached,
+        targets={unknown_id},
+    )
+    return {
+        "empty": False,
+        "day": seed,
+        "offset": offset,
+        "total": int(total),
+        "unknown_id": unknown_id,
+        "sentence": {
+            "ja": ja,
+            "en": en or "",
+            "source_id": int(source_id),
+            "idx": int(idx),
+            "kana": annotated["kana"],
+            "listenable": annotated["listenable"],
+            "tokens": annotated["tokens"],
+        },
+    }
+
+
+def record_feed_again(db, subject_id):
+    """Again on the feed is a lookup, and a lookup of a started word is a drill miss."""
+    require_index(db)
+    subject_id = int(subject_id)
+    rows = db.execute("select level from wk_catalog where id = %s", [subject_id], fetch=True)
+    if not rows:
+        raise ValueError("subject not found")
+    item_level = int(rows[0][0] or 0)
+    stage = fetch_stages(db, [subject_id]).get(subject_id, 0)
+    recorded = False
+    if stage >= 1 and item_level <= user_level(db):
+        from shared.drill import record_lookup
+        record_lookup(db, subject_id)
+        recorded = True
+    return {"ok": True, "recorded_miss": recorded, "subject_id": subject_id}
+
+
 def user_level(db):
     if not _has(db, "public.wk_subjects"):
         return 1

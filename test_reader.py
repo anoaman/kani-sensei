@@ -13,6 +13,7 @@ from shared.reader import (
     kanji_from_radicals,
     plan_level,
     segment,
+    unknown_word,
 )
 
 
@@ -263,6 +264,18 @@ class SentenceIndexTests(unittest.TestCase):
         self.assertEqual(rows[0]["kanji_ids"], [])
         self.assertEqual(rows[0]["max_level"], 3)
         self.assertEqual(rows[0]["idx"], 0)
+
+
+class FeedTests(unittest.TestCase):
+    def test_just_right_is_exactly_one_unknown_word_in_range(self):
+        levels = {1: 2, 2: 5, 3: 19, 4: 20}
+        stages = {1: 5, 2: 4, 3: 9}
+        self.assertEqual(unknown_word([1, 2, 3], levels, stages, 19), 2)
+        self.assertIsNone(unknown_word([1, 2], levels, {1: 4, 2: 0}, 19))
+        self.assertIsNone(unknown_word([1, 3], levels, stages, 19))
+        self.assertIsNone(unknown_word([1, 4], levels, {1: 5}, 19))
+        self.assertIsNone(unknown_word([], levels, stages, 19))
+        self.assertEqual(unknown_word([1, 2], levels, {1: 5}, 19), 2)
 
 
 class QuestionTests(unittest.TestCase):

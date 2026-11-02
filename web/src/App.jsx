@@ -9,6 +9,7 @@ import ReadIndex from "./ReadIndex.jsx";
 import ReadLevel from "./ReadLevel.jsx";
 import Reader from "./Reader.jsx";
 import KanjiWeb from "./KanjiWeb.jsx";
+import ReadFeed from "./ReadFeed.jsx";
 
 // /level/N/continue: jump to whatever that level needs most, else its page.
 function ContinueRoute({ level, go }) {
@@ -47,6 +48,7 @@ function viewFromPath(pathname) {
   if (pathname.startsWith("/today")) return "today";
   if (pathname.startsWith("/gate")) return "gate";
   if (pathname.startsWith("/read/today")) return "read-today";
+  if (pathname.startsWith("/read/feed")) return "read-feed";
   if (pathname.startsWith("/read/level/")) return "read-level";
   if (pathname.startsWith("/read/p/")) return "read-passage";
   if (pathname === "/read" || pathname.startsWith("/read/")) return "read";
@@ -260,6 +262,7 @@ export default function App() {
       {view === "today" ? <CourseSession key={pathname} daily go={navigate} onFocus={setFocus} /> : null}
       {view === "continue" ? <ContinueRoute key={pathname} level={levelFromPath(pathname)} go={navigate} /> : null}
       {view === "read" ? <ReadIndex go={navigate} /> : null}
+      {view === "read-feed" ? <ReadFeed go={navigate} /> : null}
       {view === "read-level" ? <ReadLevel key={pathname} level={readLevelFromPath(pathname)} go={navigate} /> : null}
       {view === "web" ? <KanjiWeb key={pathname} level={webLevelFromPath(pathname)} go={navigate} /> : null}
       {view === "read-passage" || view === "read-today" ? (
