@@ -1,6 +1,7 @@
 import unittest
 
 from shared.reader import (
+    DAILY_SENTENCES,
     PASSAGE_SIZE,
     align_furigana,
     annotate_sentence,
@@ -180,6 +181,25 @@ class PlanTests(unittest.TestCase):
         plan = build_level_plan(targets, primary, extra)
         self.assertEqual(plan["uncovered"], [])
         self.assertEqual({sentence["source_id"] for sentence in plan["chosen"]}, {10, 11})
+
+    def test_daily_cap_is_one_passage(self):
+        targets = [{"id": item, "lesson_position": item} for item in range(1, 15)]
+        candidates = [
+            {
+                "source_id": item,
+                "sentence_idx": 0,
+                "ja": f"s{item}",
+                "en": "",
+                "covers": {item},
+                "above_kanji": 0,
+                "length": 8,
+            }
+            for item in range(1, 15)
+        ]
+        plan = plan_level(targets, candidates, passage_size=DAILY_SENTENCES, limit=DAILY_SENTENCES)
+        self.assertEqual(len(plan["chosen"]), DAILY_SENTENCES)
+        self.assertEqual(len(plan["passages"]), 1)
+        self.assertTrue(plan["uncovered"])
 
 
 class QuestionTests(unittest.TestCase):

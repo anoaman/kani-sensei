@@ -1643,6 +1643,95 @@ def daily_summary(db):
     }
 
 
+def _items_with_sentences(db, ids):
+    ids = sorted({int(item) for item in ids if item is not None})
+    if not ids:
+        return []
+    rows = db.execute(
+        """
+        select id, object_type, level, characters, primary_meaning, meanings, readings,
+               context_sentences, lesson_position
+        from wk_catalog where id = any(%s)
+        """,
+        [ids],
+        fetch=True,
+    )
+    return [_catalog_item(row) for row in rows]
+
+
+def _vocab_containing(db, low, high, characters, exclude_ids):
+    safe = []
+    for char in characters or []:
+        if char and char not in safe and char not in "\\]^-":
+            safe.append(char)
+    if not safe or high < low:
+        return []
+    rows = db.execute(
+        """
+        select id, object_type, level, characters, primary_meaning, meanings, readings,
+               context_sentences, lesson_position
+        from wk_catalog
+        where object_type in ('vocabulary', 'kana_vocabulary')
+          and level between %s and %s
+          and not (id = any(%s))
+          and characters ~ %s
+        order by level, lesson_position nulls last, id
+        limit 400
+        """,
+        [low, high, list(exclude_ids or [0]), "[" + "".join(safe) + "]"],
+        fetch=True,
+    )
+    return [_catalog_item(row) for row in rows]
+
+
+def build_daily_read(db):
+    """One passage from today's set, frozen for the WIB day. Radicals-only sets are empty."""
+    from shared.daily import fetch_daily, today as wib_today
+
+    require_catalog(db)
+    day = wib_today()
+    passage_id = f"daily:{day.isoformat()}"
+    if _passage_tuple(db, passage_id):
+        return render_passage(db, passage_id)
+
+    fetch_daily(db, with_items=False)
+    rows = db.execute("select subject_ids from daily_sets where day = %s", [day], fetch=True)
+    subject_ids = [int(item) for item in ((rows[0][0] if rows else []) or [])]
+    items = _items_with_sentences(db, subject_ids)
+    targets = [item for item in items if item["type"] in TARGET_TYPES]
+    if not targets:
+        return {"empty": True, "id": passage_id, "day": day.isoformat(), "kind": "daily"}
+
+    reached = user_level(db)
+    lexicon = load_lexicon(db)
+    target_ids = {item["id"] for item in targets}
+    primary = candidates_from_rows(
+        [item for item in targets if item["type"] != "kanji"],
+        lexicon,
+        target_ids,
+        reached,
+    )
+    kanji_chars = [item["characters"] for item in targets if item["type"] == "kanji" and item.get("characters")]
+    extra = candidates_from_rows(
+        _vocab_containing(db, 1, reached, kanji_chars, target_ids),
+        lexicon,
+        target_ids,
+        reached,
+    )
+    plan = plan_level(targets, primary + extra, passage_size=DAILY_SENTENCES, limit=DAILY_SENTENCES)
+    chunk = plan["passages"][0] if plan["passages"] else []
+    if not chunk:
+        return {"empty": True, "id": passage_id, "day": day.isoformat(), "kind": "daily"}
+
+    covers = sorted({int(item) for candidate in chunk for item in candidate["covers"]})
+    sentences = [
+        {"ja": candidate["ja"], "en": candidate["en"], "source_id": candidate["source_id"]}
+        for candidate in chunk
+    ]
+    _insert_passage(db, passage_id, "daily", reached, day, 1, "Today's read", sentences, covers)
+    return render_passage(db, passage_id)
+
+
 def note_lookup(db, passage_id, subject_id):
     require_catalog(db)
     subject_id = int(subject_id)
