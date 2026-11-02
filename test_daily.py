@@ -1,7 +1,7 @@
 import unittest
 from datetime import date, datetime, timezone
 
-from shared.daily import streak_from, today
+from shared.daily import balance_daily, streak_from, today
 
 
 class DailyTests(unittest.TestCase):
@@ -16,6 +16,24 @@ class DailyTests(unittest.TestCase):
     def test_open_today_does_not_break_yesterdays_streak(self):
         days = [date(2026, 10, 8), date(2026, 10, 7)]
         self.assertEqual(streak_from(days, date(2026, 10, 9)), 2)
+
+    def test_radicals_stay_capped_when_kanji_or_words_are_waiting(self):
+        items = [(index, "radical") for index in range(15)]
+        items += [(100 + index, "kanji") for index in range(10)]
+        items += [(200 + index, "vocabulary") for index in range(10)]
+        picked = balance_daily(items, 20)
+        self.assertEqual(
+            picked,
+            [0, 1, 2, 3, 4] + [100 + index for index in range(10)] + [200 + index for index in range(5)],
+        )
+
+    def test_radical_only_pool_keeps_the_old_order(self):
+        items = [(index, "radical") for index in range(30)]
+        self.assertEqual(balance_daily(items, 20), list(range(20)))
+
+    def test_spare_radicals_fill_seats_nothing_else_can(self):
+        items = [(index, "radical") for index in range(8)] + [(100, "kanji")]
+        self.assertEqual(balance_daily(items, 20), [0, 1, 2, 3, 4, 100, 5, 6, 7])
 
     def test_missed_day_resets(self):
         days = [date(2026, 10, 9), date(2026, 10, 7), date(2026, 10, 6)]

@@ -14,6 +14,37 @@ from datetime import date, datetime, timedelta, timezone
 from shared.course import QUEUE_COLUMNS, ensure_schema as ensure_course_schema, queue_item
 
 DAILY_SIZE = 20
+RADICAL_CAP = 5
+# Look past the first page so a wall of radicals cannot hide every kanji and word.
+_PICK_POOL = 4
+
+
+def balance_daily(items, size, radical_cap=RADICAL_CAP):
+    """Keep pick order, and stop radicals from filling the set.
+
+    The cap applies when a kanji or word is in the pool. Radicals past the
+    cap wait, then fill any seats that are still empty.
+    """
+    ordered = [(int(subject_id), object_type or "") for subject_id, object_type in (items or [])]
+    if not any(object_type != "radical" for _subject_id, object_type in ordered):
+        return [subject_id for subject_id, _object_type in ordered[:size]]
+    chosen = []
+    deferred = []
+    radicals = 0
+    for subject_id, object_type in ordered:
+        if len(chosen) >= size:
+            break
+        if object_type == "radical":
+            if radicals >= radical_cap:
+                deferred.append(subject_id)
+                continue
+            radicals += 1
+        chosen.append(subject_id)
+    for subject_id in deferred:
+        if len(chosen) >= size:
+            break
+        chosen.append(subject_id)
+    return chosen
 WIB = timezone(timedelta(hours=7))
 
 SCHEMA = """
@@ -62,7 +93,7 @@ def streak_from(days, current):
 def _pick(db, size):
     rows = db.execute(
         """
-        select c.subject_id
+        select c.subject_id, s.object_type
         from course_items c
         join wk_subjects s on s.id = c.subject_id
         where c.srs_stage between 0 and 8
@@ -76,10 +107,10 @@ def _pick(db, size):
           c.subject_id
         limit %s
         """,
-        [size],
+        [size * _PICK_POOL],
         fetch=True,
     )
-    return [int(row[0]) for row in rows]
+    return balance_daily(rows, size)
 
 
 def _row(db, day):
