@@ -2,6 +2,7 @@ import unittest
 
 from shared.inspect import (
     build_inspect_card,
+    catalog_card_inputs,
     first_audio_url,
     first_sentence,
     labeled_readings,
@@ -64,6 +65,37 @@ class InspectTests(unittest.TestCase):
         self.assertEqual(card["srs_name"], "apprentice 3")
         self.assertEqual(card["sentence"]["en"], "The fire is strong.")
         self.assertTrue(card["mnemonic"]["meaning"])
+
+    def test_catalog_card_keeps_sentence_audio_and_parts_without_a_mnemonic(self):
+        inputs = catalog_card_inputs({
+            "id": 9001,
+            "object_type": "vocabulary",
+            "characters": "経済",
+            "slug": "keizai",
+            "primary_meaning": "Economy",
+            "meanings": ["Economy", "Finance"],
+            "readings": [{"reading": "けいざい", "primary": True, "accepted_answer": True}],
+            "parts_of_speech": ["noun"],
+            "context_sentences": [{"ja": "経済が伸びた。", "en": "The economy grew."}],
+            "component_ids": [11],
+            "similar_ids": [],
+            "amalgamation_ids": [22],
+            "audio_url": "https://cdn.example/keizai.mp3",
+            "level": 28,
+        })
+        card = build_inspect_card(
+            **inputs,
+            srs_stage=None,
+            related=[{"subject_id": 11, "characters": "経", "meaning": "Pass Through", "type": "kanji", "level": 8, "slug": "kei"}],
+        )
+        self.assertEqual(card["meanings"], ["Economy", "Finance"])
+        self.assertEqual(card["readings"][0]["reading"], "けいざい")
+        self.assertEqual(card["sentence"]["ja"], "経済が伸びた。")
+        self.assertEqual(card["audio_url"], "https://cdn.example/keizai.mp3")
+        self.assertEqual(card["parts_of_speech"], ["noun"])
+        self.assertEqual(card["components"][0]["characters"], "経")
+        self.assertIsNone(card["mnemonic"]["meaning"])
+        self.assertIsNone(card["mnemonic"]["reading"])
 
 
 if __name__ == "__main__":
