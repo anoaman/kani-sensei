@@ -156,6 +156,8 @@ export function LevelPage({ level, go }) {
         </div>
         <div className="level-nav">
           {level > 1 ? <button className="ghost-btn" onClick={() => go(`/level/${level - 1}`)}>← {level - 1}</button> : null}
+          <button className="ghost-btn" onClick={() => go(`/read/level/${level}`)}>Read</button>
+          <button className="ghost-btn" onClick={() => go(`/level/${level}/web`)}>Kanji web</button>
           <button className="ghost-btn" onClick={() => go(`/session?min=${level}&max=${level}&count=10&types=radical,kanji,vocabulary&pool=decay&go=1`)}>Quick drill</button>
           {level < 60 ? <button className="ghost-btn" onClick={() => go(`/level/${level + 1}`)}>{level + 1} →</button> : null}
         </div>

@@ -40,6 +40,22 @@ function leftToday() {
   return h ? `${h}h ${mins % 60}m left today` : `${mins}m left today`;
 }
 
+function TodayRead({ go }) {
+  const [info, setInfo] = useState(null);
+  useEffect(() => {
+    api.readIndex().then(setInfo).catch(() => setInfo(null));
+  }, []);
+  if (!info?.catalog_ready || info.daily?.empty) return null;
+  const done = Boolean(info.daily?.finished);
+  return (
+    <button type="button" className={`today-read${done ? " done" : ""}`} onClick={() => go("/read/today")}>
+      <p className="kicker">Today's read</p>
+      <strong>{done ? "✓ Read for today" : "Read today's words in context"}</strong>
+      <span>{done ? "Finished" : "A short read from today's set"}</span>
+    </button>
+  );
+}
+
 function TodayTarget({ today, go }) {
   const { done, total, completed, streak } = today;
   const left = total - done;
@@ -413,6 +429,7 @@ export default function Home({ go }) {
               : <>{total.toLocaleString()} items from levels 1–{levels.length} are still in there somewhere. Let's find out how many.</>}
           </p>
           {today?.total ? <TodayTarget today={today} go={go} /> : null}
+          <TodayRead go={go} />
           {next && !(today?.total && !today.completed) ? (
             <div className="home-next">
               <button
