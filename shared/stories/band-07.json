@@ -1,0 +1,51 @@
+{
+  "band": 7,
+  "version": 1,
+  "title": "Yuki's letter",
+  "pages": [
+    {
+      "title": "朝の電車",
+      "sentences": [
+        {"ja": "ゆきは高校生です。", "en": "Yuki is a high school student."},
+        {"ja": "朝、ゆきは家を出ます。", "en": "In the morning, Yuki leaves the house."},
+        {"ja": "ゆきは電車に乗ります。", "en": "Yuki gets on the train."},
+        {"ja": "電車の中で本を見ます。", "en": "She looks at a book on the train."},
+        {"ja": "学校の木は高いです。", "en": "The trees at school are tall."},
+        {"ja": "学校まで時間があります。", "en": "There is time before she reaches school."}
+      ]
+    },
+    {
+      "title": "教室",
+      "sentences": [
+        {"ja": "教室は広いです。", "en": "The classroom is wide."},
+        {"ja": "先生は新しい字を教えます。", "en": "The teacher teaches new characters."},
+        {"ja": "ゆきは先生と話をします。", "en": "Yuki talks with the teacher."},
+        {"ja": "ゆきはノートに字をかきます。", "en": "Yuki writes the characters in her notebook."},
+        {"ja": "今日の話は少し長いです。", "en": "Today's talk is a little long."},
+        {"ja": "今日の学校は楽しいです。", "en": "School is fun today."}
+      ]
+    },
+    {
+      "title": "手紙",
+      "sentences": [
+        {"ja": "家に手紙があります。", "en": "There is a letter at home."},
+        {"ja": "手紙は友人のものです。", "en": "The letter is from a friend."},
+        {"ja": "友人は海の近くにいます。", "en": "The friend is near the sea."},
+        {"ja": "ゆきは手紙を見ます。", "en": "Yuki looks at the letter."},
+        {"ja": "手紙の字は小さいです。", "en": "The characters in the letter are small."},
+        {"ja": "ゆきはこの手紙が気に入る。", "en": "Yuki likes this letter."}
+      ]
+    },
+    {
+      "title": "夜の電話",
+      "sentences": [
+        {"ja": "夜、友人から電話があります。", "en": "At night, there is a phone call from the friend."},
+        {"ja": "ゆきは友人と少し話をします。", "en": "Yuki talks with the friend for a little while."},
+        {"ja": "話は海の話です。", "en": "The talk is about the sea."},
+        {"ja": "ゆきは明日の学校を考えます。", "en": "Yuki thinks about school tomorrow."},
+        {"ja": "明日は試験です。", "en": "Tomorrow is an exam."},
+        {"ja": "ゆきは早く休みます。", "en": "Yuki rests early."}
+      ]
+    }
+  ]
+}

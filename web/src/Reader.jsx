@@ -611,23 +611,32 @@ export default function Reader({ daily = false, passageId = "", go }) {
     }
   }
 
+  const story = data?.kind === "story";
+  const listHref = story && data?.level
+    ? `/read/story/${data.level}`
+    : data?.level
+      ? `/read/level/${data.level}`
+      : "/read";
   const kicker = data?.kind === "daily"
     ? "Today's read"
     : data?.kind === "custom"
       ? "Your text"
-      : data?.level
-        ? `Level ${data.level}`
-        : "Reading";
+      : story
+        ? `Levels ${data.level}–${data.reference_level}`
+        : data?.level
+          ? `Level ${data.level}`
+          : "Reading";
 
   return (
     <section className={`panel read size-${textSize}${vertical ? " is-vertical" : ""}`}>
       <div className="section-head level-head">
         <div>
-          <button type="button" className="quiet-link" onClick={() => go(data?.level ? `/read/level/${data.level}` : "/read")}>← Readings</button>
+          <button type="button" className="quiet-link" onClick={() => go(listHref)}>{story ? "← Story" : "← Readings"}</button>
           <p className="kicker">{kicker}</p>
           <h2>
             {data?.title || "Reading"}
-            {data?.of ? <small> {data.idx} of {data.of}</small> : null}
+            {story && data?.of ? <small> Page {data.idx} of {data.of}</small> : null}
+            {!story && data?.of ? <small> {data.idx} of {data.of}</small> : null}
           </h2>
         </div>
         <div className="read-switches">
@@ -761,9 +770,9 @@ export default function Reader({ daily = false, passageId = "", go }) {
               <p className="kicker">{finished.already ? "Already finished" : "Done"}</p>
               <strong>{finished.already ? "You've read this one." : "Saved."}</strong>
               {data.next_id ? (
-                <button type="button" className="go-btn" onClick={() => go(`/read/p/${encodeURIComponent(data.next_id)}`)}>Next reading</button>
+                <button type="button" className="go-btn" onClick={() => go(`/read/p/${encodeURIComponent(data.next_id)}`)}>{story ? "Next page" : "Next reading"}</button>
               ) : (
-                <button type="button" className="go-btn" onClick={() => go(data.level ? `/read/level/${data.level}` : "/read")}>Back to the list</button>
+                <button type="button" className="go-btn" onClick={() => go(listHref)}>{story ? "Back to the story" : "Back to the list"}</button>
               )}
             </div>
           ) : checking ? (

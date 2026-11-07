@@ -104,6 +104,55 @@ class SegmentTests(unittest.TestCase):
         self.assertEqual(annotated["tokens"][0]["status"], "known")
         self.assertTrue(annotated["tokens"][0]["target"])
 
+    def test_conjugation_beats_a_noun_that_shares_the_stem(self):
+        lexicon = build_lexicon([
+            entry(id=10, characters="行き", meaning="bound for", reading="ゆき", level=5),
+            entry(id=11, characters="行く", meaning="to go", reading="いく", level=5,
+                  parts_of_speech=["godan verb", "intransitive verb"]),
+            entry(id=12, characters="行う", meaning="to carry out", reading="おこなう", level=13,
+                  parts_of_speech=["godan verb", "transitive verb"]),
+            entry(id=13, characters="話", meaning="talk", reading="はなし", level=10),
+            entry(id=14, characters="話す", meaning="to speak", reading="はなす", level=8,
+                  parts_of_speech=["godan verb", "transitive verb"]),
+            entry(id=15, characters="行き先", meaning="destination", reading="いきさき", level=12),
+            entry(id=16, characters="勉強", meaning="studies", reading="べんきょう", level=4),
+            entry(id=17, characters="勉強する", meaning="to study", reading="べんきょうする", level=4,
+                  parts_of_speech=["する verb", "transitive verb"]),
+        ])
+        going = annotate_sentence("行きます", lexicon)
+        self.assertEqual(going["kana"], "いきます")
+        self.assertEqual(going["tokens"][0]["subject_id"], 11)
+        self.assertEqual(going["tokens"][0]["text"], "行")
+
+        carrying = annotate_sentence("行います", lexicon)
+        self.assertEqual(carrying["kana"], "おこないます")
+        self.assertEqual(carrying["tokens"][0]["subject_id"], 12)
+
+        speaking = annotate_sentence("話します", lexicon)
+        self.assertEqual(speaking["kana"], "はなします")
+        self.assertEqual(speaking["tokens"][0]["subject_id"], 14)
+
+        noun = annotate_sentence("行きは", lexicon)
+        self.assertEqual(noun["tokens"][0]["subject_id"], 10)
+        self.assertEqual(noun["tokens"][0]["reading"], "ゆき")
+        self.assertEqual(noun["kana"], "ゆきは")
+
+        bound = annotate_sentence("行きまで", lexicon)
+        self.assertEqual(bound["tokens"][0]["subject_id"], 10)
+        self.assertEqual(bound["kana"], "ゆきまで")
+
+        want = annotate_sentence("行きたい", lexicon)
+        self.assertEqual(want["kana"], "いきたい")
+        self.assertEqual(want["tokens"][0]["subject_id"], 11)
+
+        destination = segment("行き先", lexicon)
+        self.assertEqual(destination[0]["text"], "行き先")
+        self.assertEqual(destination[0]["subject_id"], 15)
+
+        study = annotate_sentence("勉強します", lexicon)
+        self.assertEqual(study["kana"], "べんきょうします")
+        self.assertEqual(study["tokens"][0]["subject_id"], 16)
+
 
 class DictationTests(unittest.TestCase):
     def test_katakana_matches_hiragana(self):

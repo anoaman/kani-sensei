@@ -10,7 +10,7 @@ The product has four user-facing areas:
 - **Practice** — choose a single level or range, Kanji/Vocabulary/Radicals/Mixed,
   and a 10–40 question session.
 - **Progress** — recovery summary and the levels under the most pressure.
-- **Read** — level readings from WaniKani's example sentences, a daily read, a just-right feed, listening, recall, and a Kanji Web for each level.
+- **Read** — level readings from WaniKani's example sentences, level-band stories, a daily read, a just-right feed, listening, recall, and a Kanji Web for each level.
 
 Ghosts, leeches, due items, and prior misses remain part of the drill engine,
 but are no longer separate destinations competing for attention.
@@ -31,10 +31,11 @@ but are no longer separate destinations competing for attention.
 | `/api/tick` | POST | `X-Cron-Secret` header | Scheduler entry point — check window, fetch WK, nudge if needed |
 | `/api/telegram_webhook` | POST | Telegram IP | `/status` command — on-demand snapshot |
 | `/api/sync` | GET/POST | `Authorization: Bearer` or `X-Cron-Secret` | WK → Neon sync. `?scope=catalog` refreshes the catalog and rebuilds the sentence index |
-| `/read` | GET | public | Level readings, today's read, the just-right feed, pasted text |
+| `/read` | GET | public | Level readings, stories, today's read, the just-right feed, pasted text |
 | `/read/feed` | GET | public | One sentence with a single unknown word |
+| `/read/story/N` | GET | public | One level-band story. N is the start of a band: 1, 4, 7, … 58 |
 | `/level/N/web` | GET | public | Kanji Web for one level |
-| `/api/read` | GET/POST | public | Readings, feed, search, dictation, daily read, Kanji Web (`?action=`) |
+| `/api/read` | GET/POST | public | Readings, stories, feed, search, dictation, daily read, Kanji Web (`?action=`) |
 | `/api/decay` | GET | public | Decay Map — what rotted (Phase 1) |
 | `/api/runway` | GET | public | Burn-down plan + recovery date (Phase 3) |
 
@@ -92,6 +93,8 @@ The bot will only send messages during nudge windows. Outside windows it returns
 | Full catalog and sentence index | `/api/sync?scope=catalog` | `0 22 * * 0` | Monday at 05:00 |
 
 `api/sync.py` is allowed 300 seconds. The other functions stay at 60. The catalog run rebuilds `reading_sentences` when it finishes. Until that index has rows, `/api/read` answers `409 {"error": "index_missing"}`. An empty catalog is `409 {"error": "catalog_missing"}`.
+
+`GET /api/read?action=story&band=1` is the levels 1–3 story. The other bands are 4, 7, 10, and so on up to 58. Pages open through the existing `action=passage`.
 
 ### Full catalog (weekly)
 

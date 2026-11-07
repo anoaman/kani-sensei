@@ -1,0 +1,51 @@
+{
+  "band": 4,
+  "version": 1,
+  "title": "Ken's day off",
+  "pages": [
+    {
+      "title": "休日",
+      "sentences": [
+        {"ja": "けんは少年です。", "en": "Ken is a boy."},
+        {"ja": "今日は休日です。", "en": "Today is a day off."},
+        {"ja": "けんは家を出ます。", "en": "Ken leaves the house."},
+        {"ja": "町の花は赤いです。", "en": "The flowers in town are red."},
+        {"ja": "けんは花を見ます。", "en": "Ken looks at the flowers."},
+        {"ja": "けんは花の下で休みます。", "en": "Ken rests under the flowers."}
+      ]
+    },
+    {
+      "title": "店",
+      "sentences": [
+        {"ja": "けんは小さい店に入ります。", "en": "Ken goes into a small shop."},
+        {"ja": "店の中で肉を食べます。", "en": "He eats meat in the shop."},
+        {"ja": "けんは水ものみます。", "en": "Ken drinks some water too."},
+        {"ja": "肉は千円です。", "en": "The meat is one thousand yen."},
+        {"ja": "店の人は男の人です。", "en": "The person at the shop is a man."},
+        {"ja": "けんは「ありがとう」と言います。", "en": "Ken says thank you."}
+      ]
+    },
+    {
+      "title": "海",
+      "sentences": [
+        {"ja": "けんは海まで歩きます。", "en": "Ken walks as far as the sea."},
+        {"ja": "海は広いです。", "en": "The sea is wide."},
+        {"ja": "空は青いです。", "en": "The sky is blue."},
+        {"ja": "海の右に車があります。", "en": "There is a car to the right of the sea."},
+        {"ja": "けんは車を見ます。", "en": "Ken looks at the car."},
+        {"ja": "日が海の下に行く。", "en": "The sun goes down below the sea."}
+      ]
+    },
+    {
+      "title": "家",
+      "sentences": [
+        {"ja": "けんは家に来る。", "en": "Ken comes home."},
+        {"ja": "家の中に本があります。", "en": "There is a book in the house."},
+        {"ja": "本に友人の名があります。", "en": "A friend's name is in the book."},
+        {"ja": "けんは本を見ます。", "en": "Ken looks at the book."},
+        {"ja": "けんは少し考えます。", "en": "Ken thinks for a little while."},
+        {"ja": "けんの休日はいいです。", "en": "Ken's day off is a good one."}
+      ]
+    }
+  ]
+}

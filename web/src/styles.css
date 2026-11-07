@@ -111,7 +111,7 @@ p { line-height: 1.6; }
 .dojo-hero { padding: 48px 40px 48px 8px; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; }
 .hero-glyph { font-family: var(--jp); font-weight: 900; font-size: clamp(150px, 19vw, 240px); line-height: 1; margin: 6px 0 14px -.04em; letter-spacing: -.02em; }
 .hero-hint { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 0; color: var(--ink-soft); font-size: 13px; }
-.tag { background: var(--ver-pale); color: var(--ver); font-weight: 600; font-size: 11px; padding: 3px 8px; border-radius: 3px; }
+.tag { display: inline-block; background: var(--ver-pale); color: var(--ver); font-weight: 600; font-size: 11px; padding: 3px 8px; border-radius: 3px; }
 .dojo-hero h1 { margin-top: 30px; }
 .hero-sub { margin: 6px 0 0; color: var(--ink-soft); font-size: 14px; }
 .dojo-hero .hero-actions { margin-top: 24px; gap: 20px; }
@@ -563,6 +563,34 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .read-legend { margin-top: 10px; font-size: 12px; }
 .read-coverage { margin: 14px 0; }
 .read-coverage strong { font-family: var(--serif); font-size: 32px; margin-right: 8px; }
+.read-stories { margin-top: 22px; }
+.read-stories h3 { margin: 0 0 4px; font-family: var(--serif); font-size: 22px; }
+.read-story-grid { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 10px; }
+.read-story {
+  position: relative;
+  cursor: pointer;
+  text-align: left;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(255,255,255,.5);
+}
+.read-story:hover { border-color: var(--ink); }
+.read-story b { display: block; font-size: 12px; color: var(--ink-soft); font-weight: 600; }
+.read-story strong { display: block; font-family: var(--serif); font-size: 18px; margin: 2px 0; }
+.read-story span { color: var(--ink-soft); font-size: 13px; }
+.read-story em {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  font-style: normal;
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ver);
+}
+.read-story.written { padding-right: 72px; }
+.read-story.done { border-color: var(--ok); }
 .read-passages { display: grid; gap: 8px; }
 .read-passage { cursor: pointer; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .read-passage.done strong { color: var(--ok); }
@@ -711,4 +739,5 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .web-focus .web-node.active { border-color: var(--ink); background: #fff; }
 @media (min-width: 720px) {
   .read-levels { grid-template-columns: repeat(10, minmax(0, 1fr)); }
+  .read-story-grid { grid-template-columns: 1fr 1fr; }
 }
