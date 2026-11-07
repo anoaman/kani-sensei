@@ -118,6 +118,7 @@ def sentence_trail(candidates, targets, start_ids):
 
     chosen = []
     used = set()
+    seen_ja = set()
     while remaining and len(chosen) < MAX_SENTENCES:
         best = None
         best_key = None
@@ -128,6 +129,9 @@ def sentence_trail(candidates, targets, start_ids):
                 index,
             )
             if identity in used:
+                continue
+            ja = (candidate.get("ja") or "").strip()
+            if ja and ja in seen_ja:
                 continue
             new = candidate["covers"] & remaining
             if not new:
@@ -148,6 +152,9 @@ def sentence_trail(candidates, targets, start_ids):
             break
         identity, candidate = best
         used.add(identity)
+        ja = (candidate.get("ja") or "").strip()
+        if ja:
+            seen_ja.add(ja)
         chosen.append(candidate)
         remaining -= candidate["covers"]
         previous = set(candidate["word_ids"])
@@ -167,6 +174,16 @@ def needs_rebuild(existing_versions, version):
     if not versions:
         return True
     return any(item != version for item in versions)
+
+
+def story_is_stale(existing_count, written_pages, versions, version):
+    """True when the frozen pages are missing, old, or shorter than the file.
+
+    A build that stopped after two pages used to look current, because every
+    stored page already had the right version.
+    """
+    incomplete = int(written_pages or 0) > 0 and int(existing_count or 0) < int(written_pages)
+    return incomplete or needs_rebuild(versions, version)
 
 
 def authored_path(start):
@@ -338,7 +355,8 @@ def build_story(db, start):
         [STORY_KIND, start],
         fetch=True,
     )
-    if not needs_rebuild([row[0] for row in existing], version):
+    written_pages = len((story or {}).get("pages") or [])
+    if not story_is_stale(len(existing), written_pages, [row[0] for row in existing], version):
         return start
 
     lexicon = load_lexicon(db)
@@ -361,23 +379,25 @@ def build_story(db, start):
             page["title"] = f"Page {index}"
             pages.append(page)
 
-    db.execute(
-        "delete from reading_passages where kind = %s and level = %s",
-        [STORY_KIND, start],
-    )
-    for index, page in enumerate(pages, start=1):
-        _insert_passage(
-            db,
-            f"story:{start}:{index}",
-            STORY_KIND,
-            start,
-            None,
-            index,
-            page["title"],
-            page["sentences"],
-            sorted(page["covers"]),
-            plan_version=version,
+    # One transaction: a killed request rolls back instead of freezing a short story.
+    with db.reuse():
+        db.execute(
+            "delete from reading_passages where kind = %s and level = %s",
+            [STORY_KIND, start],
         )
+        for index, page in enumerate(pages, start=1):
+            _insert_passage(
+                db,
+                f"story:{start}:{index}",
+                STORY_KIND,
+                start,
+                None,
+                index,
+                page["title"],
+                page["sentences"],
+                sorted(page["covers"]),
+                plan_version=version,
+            )
     return start
 
 

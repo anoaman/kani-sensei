@@ -556,8 +556,97 @@ def _merge_plain(tokens):
     return merged
 
 
+_GODAN_ROWS = {
+    "く": "かきくけこ",
+    "ぐ": "がぎぐげご",
+    "す": "さしすせそ",
+    "つ": "たちつてと",
+    "ぬ": "なにぬねの",
+    "ぶ": "ばびぶべぼ",
+    "む": "まみむめも",
+    "る": "らりるれろ",
+    "う": "わいうえお",
+}
+
+
+def _part_names(entry):
+    return [str(part).casefold().replace("_", " ") for part in (entry.get("parts_of_speech") or [])]
+
+
+def _inflection_head(entry, nxt, rest):
+    """True when `nxt` begins a conjugation of this dictionary form."""
+    dictionary = entry.get("dictionary") or ""
+    if not dictionary or not is_kana(dictionary[-1]) or not is_kana(nxt):
+        return False
+    parts = _part_names(entry)
+    if any("adjective" in part for part in parts) and not any("verb" in part for part in parts):
+        return nxt in "いくけか"
+    if any("ichidan" in part for part in parts):
+        return nxt in "たてなまられよろさずぬ"
+    last = dictionary[-1]
+    if nxt in _GODAN_ROWS.get(last, ""):
+        return True
+    # て/た forms that leave the row: 書いて, 読んで, 行って.
+    if last in "くぐ" and nxt == "い" and rest[:1] in "てた":
+        return True
+    if last in "ぶむぬ" and nxt == "ん" and rest[:1] in "でだ":
+        return True
+    if last in "うつる" and nxt == "っ" and rest[:1] in "てた":
+        return True
+    return False
+
+
+def _ending_continues(text, pos):
+    """True when the kana after a swallowed ending still belongs to the verb.
+
+    行きます continues (ます). 行きは and 行きまで do not: は and まで
+    belong to the noun 行き.
+    """
+    if pos >= len(text) or not is_kana(text[pos]):
+        return False
+    char = text[pos]
+    nxt = text[pos + 1] if pos + 1 < len(text) else ""
+    if char == "ま":
+        return nxt in "すしせ"
+    if char == "な":
+        return nxt in "いがさ"
+    return char in "たてそ"
+
+
+def _conjugation_instead(text, index, exact_size, lexicon, prefer):
+    """Use a verb or い-adjective when the exact noun ate its ending.
+
+    行きます would otherwise match 行き (ゆき). 話します would match 話
+    (はなし). 行きは stays the noun. A longer word such as 行き先 stays whole.
+    """
+    for stem_len in range(exact_size, 0, -1):
+        if index + stem_len >= len(text):
+            continue
+        stems = lexicon.stems.get(text[index:index + stem_len]) or []
+        nxt = text[index + stem_len]
+        rest = text[index + stem_len + 1:index + stem_len + 3]
+        matching = []
+        for entry in stems:
+            if not entry.get("conjugating"):
+                continue
+            if not _inflection_head(entry, nxt, rest):
+                continue
+            if exact_size > stem_len + 1:
+                continue
+            if exact_size == stem_len + 1 and not _ending_continues(text, index + exact_size):
+                continue
+            matching.append(entry)
+        if matching:
+            return stem_len, choose_entry(matching, prefer), True
+    return None
+
+
 def segment(text, lexicon, prefer=None):
-    """Longest vocabulary match, exact before stem, then single kanji, then plain runs."""
+    """Longest vocabulary match, exact before stem, then single kanji, then plain runs.
+
+    A conjugating stem wins over an exact noun when that noun is the stem, or
+    the stem plus one kana, and the text keeps conjugating (行きます, 話します).
+    """
     if prefer is not None:
         try:
             prefer = int(prefer)
@@ -573,11 +662,21 @@ def segment(text, lexicon, prefer=None):
             chunk = text[index:index + size]
             exact = lexicon.exact.get(chunk)
             if exact:
-                found = (size, choose_entry(exact, prefer), False)
+                entry = choose_entry(exact, prefer)
+                stolen = None
+                if prefer is None or entry["id"] != prefer:
+                    stolen = _conjugation_instead(text, index, size, lexicon, prefer)
+                found = stolen or (size, entry, False)
                 break
             stems = lexicon.stems.get(chunk)
             if stems:
-                found = (size, choose_entry(stems, prefer), True)
+                nxt = text[index + size] if index + size < length else ""
+                rest = text[index + size + 1:index + size + 3] if nxt else ""
+                matching = [
+                    item for item in stems
+                    if nxt and _inflection_head(item, nxt, rest)
+                ]
+                found = (size, choose_entry(matching or stems, prefer), True)
                 break
         if found:
             size, entry, is_stem = found
@@ -1744,7 +1843,6 @@ def ensure_level_passages(db, level, lexicon=None):
         )
         if touched:
             return
-        db.execute("delete from reading_passages where kind = 'level' and level = %s", [level])
 
     lexicon = lexicon or load_lexicon(db)
     items = _level_items(db, level)
@@ -1762,23 +1860,27 @@ def ensure_level_passages(db, level, lexicon=None):
     extra_rows = _extra_vocab(db, level, missing_kanji) if missing_kanji else []
     extra = candidates_from_rows(extra_rows, lexicon, target_ids, level)
     plan = build_level_plan(items, primary, extra)
-    for index, chunk in enumerate(plan["passages"], start=1):
-        covers = sorted({int(item) for candidate in chunk for item in candidate["covers"]})
-        sentences = [
-            {"ja": candidate["ja"], "en": candidate["en"], "source_id": candidate["source_id"]}
-            for candidate in chunk
-        ]
-        _insert_passage(
-            db,
-            f"level:{level}:{index}",
-            "level",
-            level,
-            None,
-            index,
-            f"Reading {index}",
-            sentences,
-            covers,
-        )
+    # Replace the old pages and write the new ones together. A failure while
+    # choosing sentences no longer deletes the readings the learner already has.
+    with db.reuse():
+        db.execute("delete from reading_passages where kind = 'level' and level = %s", [level])
+        for index, chunk in enumerate(plan["passages"], start=1):
+            covers = sorted({int(item) for candidate in chunk for item in candidate["covers"]})
+            sentences = [
+                {"ja": candidate["ja"], "en": candidate["en"], "source_id": candidate["source_id"]}
+                for candidate in chunk
+            ]
+            _insert_passage(
+                db,
+                f"level:{level}:{index}",
+                "level",
+                level,
+                None,
+                index,
+                f"Reading {index}",
+                sentences,
+                covers,
+            )
 
 
 def _target_count(db, level):

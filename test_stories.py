@@ -8,6 +8,7 @@ from shared.stories import (
     band_range,
     iter_authored,
     needs_rebuild,
+    story_is_stale,
     sentence_trail,
     story_violations,
 )
@@ -127,6 +128,17 @@ class TrailTests(unittest.TestCase):
         self.assertEqual(len(order_of(pages)), MAX_PAGES * PAGE_SENTENCES)
         self.assertEqual(order_of(pages), list(range(1, 26)))
 
+    def test_the_same_japanese_sentence_is_not_repeated(self):
+        first = sentence(1, {1}, {1})
+        first["ja"] = "同じです。"
+        second = sentence(2, {2}, {1})
+        second["ja"] = "同じです。"
+        third = sentence(3, {2}, {9})
+        pages = sentence_trail([first, second, third], [1, 2], set())
+        texts = [item["ja"] for page in pages for item in page]
+        self.assertEqual(texts, ["同じです。", third["ja"]])
+        self.assertEqual(order_of(pages), [1, 3])
+
 
 class AuthoredFileTests(unittest.TestCase):
     def test_written_stories_have_three_to_five_pages(self):
@@ -153,6 +165,12 @@ class RebuildTests(unittest.TestCase):
         self.assertFalse(needs_rebuild([1, 1], 1))
         self.assertTrue(needs_rebuild([1], 2))
         self.assertTrue(needs_rebuild([1, 2], 2))
+
+    def test_a_short_story_is_rebuilt_even_when_the_version_matches(self):
+        self.assertFalse(story_is_stale(4, 4, [1, 1, 1, 1], 1))
+        self.assertFalse(story_is_stale(5, 4, [1, 1, 1, 1, 1], 1))
+        self.assertTrue(story_is_stale(2, 4, [1, 1], 1))
+        self.assertTrue(story_is_stale(4, 4, [1, 2, 1, 1], 2))
 
 
 if __name__ == "__main__":

@@ -111,7 +111,7 @@ p { line-height: 1.6; }
 .dojo-hero { padding: 48px 40px 48px 8px; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; }
 .hero-glyph { font-family: var(--jp); font-weight: 900; font-size: clamp(150px, 19vw, 240px); line-height: 1; margin: 6px 0 14px -.04em; letter-spacing: -.02em; }
 .hero-hint { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 0; color: var(--ink-soft); font-size: 13px; }
-.tag { background: var(--ver-pale); color: var(--ver); font-weight: 600; font-size: 11px; padding: 3px 8px; border-radius: 3px; }
+.tag { display: inline-block; background: var(--ver-pale); color: var(--ver); font-weight: 600; font-size: 11px; padding: 3px 8px; border-radius: 3px; }
 .dojo-hero h1 { margin-top: 30px; }
 .hero-sub { margin: 6px 0 0; color: var(--ink-soft); font-size: 14px; }
 .dojo-hero .hero-actions { margin-top: 24px; gap: 20px; }

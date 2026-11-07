@@ -50,6 +50,12 @@ function isPassage(url) {
   return action === "passage" || action === "daily";
 }
 
+async function shell() {
+  const cached = await caches.match("/index.html");
+  if (cached) return cached;
+  return new Response("", { status: 503, headers: { "Content-Type": "text/html; charset=utf-8" } });
+}
+
 async function rememberPassage(request) {
   const cache = await caches.open(PASSAGES);
   const response = await fetch(request);
@@ -80,10 +86,12 @@ self.addEventListener("fetch", (event) => {
   }
   if (url.pathname.startsWith("/api/")) return;
   if (request.mode === "navigate") {
-    event.respondWith(fetch(request).catch(() => caches.match("/index.html")));
+    event.respondWith(fetch(request).catch(() => shell()));
     return;
   }
-  event.respondWith(caches.match(request).then((cached) => cached || fetch(request)));
+  event.respondWith(
+    caches.match(request).then((cached) => cached || fetch(request)).catch(() => new Response("", { status: 504 })),
+  );
 });
 `,
       });

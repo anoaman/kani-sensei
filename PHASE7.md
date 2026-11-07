@@ -66,10 +66,10 @@ sentences can.
   are not a plot. Only bands 1–3, 4–6, and 7–9 have a written story.
 - Five sentences cannot hold every item in three levels. The trail stops at
   5 pages. Whatever is left stays uncovered.
-- Furigana on the written pages comes from the same segmenter as pasted text.
-  A conjugated verb can lose to a longer noun (`行きます` matched 行き, "train
-  direction"), so those sentences were rewritten to a form the segmenter reads
-  correctly. `scripts/check_stories.py` is how that gets caught.
+- Furigana comes from the same segmenter as pasted text. A verb or
+  い-adjective wins when the next kana continues its conjugation, so
+  `行きます` reads いく and `行きは` stays the noun ゆき. The written pages
+  were checked with `scripts/check_stories.py`.
 - A kanji can be inside the band while the vocabulary item for that character
   is taught later. 海 is a level 6 kanji and a level 9 word. The kanji check
   allows it. The reader then marks the word above the band and keeps the
