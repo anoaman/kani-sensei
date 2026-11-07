@@ -6,6 +6,7 @@ from shared.stories import (
     PAGE_SENTENCES,
     band_of,
     band_range,
+    iter_authored,
     needs_rebuild,
     sentence_trail,
     story_violations,
@@ -125,6 +126,25 @@ class TrailTests(unittest.TestCase):
         self.assertTrue(all(len(page) == PAGE_SENTENCES for page in pages))
         self.assertEqual(len(order_of(pages)), MAX_PAGES * PAGE_SENTENCES)
         self.assertEqual(order_of(pages), list(range(1, 26)))
+
+
+class AuthoredFileTests(unittest.TestCase):
+    def test_written_stories_have_three_to_five_pages(self):
+        stories = iter_authored()
+        self.assertEqual([story["band"] for story in stories], [1, 4, 7])
+        for story in stories:
+            self.assertGreaterEqual(int(story["version"]), 1)
+            self.assertTrue((story.get("title") or "").strip())
+            self.assertGreaterEqual(len(story["pages"]), 3)
+            self.assertLessEqual(len(story["pages"]), 5)
+            for page in story["pages"]:
+                self.assertTrue((page.get("title") or "").strip())
+                sentences = page["sentences"]
+                self.assertGreaterEqual(len(sentences), 5)
+                self.assertLessEqual(len(sentences), 8)
+                for sentence in sentences:
+                    self.assertTrue(sentence["ja"].strip())
+                    self.assertTrue(sentence["en"].strip())
 
 
 class RebuildTests(unittest.TestCase):

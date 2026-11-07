@@ -1,0 +1,51 @@
+{
+  "band": 1,
+  "version": 1,
+  "title": "Mika's mountain",
+  "pages": [
+    {
+      "title": "山の入り口",
+      "sentences": [
+        {"ja": "みかは女の子です。", "en": "Mika is a girl."},
+        {"ja": "今日、みかはお母さんと山にいきます。", "en": "Today Mika goes to the mountain with her mother."},
+        {"ja": "山の入り口は広いです。", "en": "The entrance to the mountain is wide."},
+        {"ja": "二人は水をのみます。", "en": "The two of them drink some water."},
+        {"ja": "日は山の上にあります。", "en": "The sun is above the mountain."},
+        {"ja": "山の中に古い木があります。", "en": "There are old trees in the mountain."}
+      ]
+    },
+    {
+      "title": "川と犬",
+      "sentences": [
+        {"ja": "山の下に大きい川があります。", "en": "There is a big river below the mountain."},
+        {"ja": "川の右に小さい犬がいます。", "en": "There is a small dog to the right of the river."},
+        {"ja": "犬の目は丸いです。", "en": "The dog's eyes are round."},
+        {"ja": "犬の毛は白いです。", "en": "The dog's fur is white."},
+        {"ja": "犬は川の水をのみます。", "en": "The dog drinks the river water."},
+        {"ja": "みかは木の下で立ちます。", "en": "Mika stands under a tree."}
+      ]
+    },
+    {
+      "title": "本",
+      "sentences": [
+        {"ja": "お父さんは山の出口にいます。", "en": "Her father is at the exit from the mountain."},
+        {"ja": "お父さんの手に本があります。", "en": "There is a book in her father's hand."},
+        {"ja": "本の字は大きいです。", "en": "The characters in the book are big."},
+        {"ja": "みかは正しい字をかきます。", "en": "Mika writes the correct characters."},
+        {"ja": "今は夕日です。", "en": "The evening sun is out now."},
+        {"ja": "三人は市の出口にいきます。", "en": "The three of them go to the city exit."}
+      ]
+    },
+    {
+      "title": "白い牛",
+      "sentences": [
+        {"ja": "市の外に田があります。", "en": "There are rice fields outside the city."},
+        {"ja": "田の中に大きい牛がいます。", "en": "There is a big cow in the field."},
+        {"ja": "牛の毛は白いです。", "en": "The cow's fur is white."},
+        {"ja": "みかは牛を少しみます。", "en": "Mika looks at the cow a little."},
+        {"ja": "お母さんの手に千円があります。", "en": "There are one thousand yen in her mother's hand."},
+        {"ja": "今日の山は大切です。", "en": "Today's mountain matters to her."}
+      ]
+    }
+  ]
+}
