@@ -76,6 +76,7 @@ export const api = {
     request("/api/read?action=custom", { method: "POST", body: JSON.stringify(body) }),
   readSearch: (q) => request(`/api/read?action=search&q=${encodeURIComponent(q)}`),
   readFeed: (offset = 0) => request(`/api/read?action=feed&offset=${encodeURIComponent(offset)}`),
+  readStory: (band) => request(`/api/read?action=story&band=${encodeURIComponent(band)}`),
   readFeedAgain: (subjectId) =>
     request("/api/read?action=feed", { method: "POST", body: JSON.stringify({ subject_id: subjectId }) }),
 };

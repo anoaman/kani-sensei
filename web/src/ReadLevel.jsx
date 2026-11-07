@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import { api } from "./api.js";
 import { CatalogNote } from "./ReadIndex.jsx";
 
+function bandOf(level) {
+  return Math.floor((Number(level) - 1) / 3) * 3 + 1;
+}
+
 export default function ReadLevel({ level, go }) {
   const [data, setData] = useState(null);
   const [missing, setMissing] = useState(false);
@@ -32,6 +36,9 @@ export default function ReadLevel({ level, go }) {
         </div>
         <div className="level-nav">
           {level > 1 ? <button type="button" className="ghost-btn" onClick={() => go(`/read/level/${level - 1}`)}>← {level - 1}</button> : null}
+          <button type="button" className="ghost-btn" onClick={() => go(`/read/story/${bandOf(level)}`)}>
+            Levels {bandOf(level)}–{Math.min(60, bandOf(level) + 2)} story
+          </button>
           <button type="button" className="ghost-btn" onClick={() => go(`/level/${level}`)}>Level page</button>
           {level < 60 ? <button type="button" className="ghost-btn" onClick={() => go(`/read/level/${level + 1}`)}>{level + 1} →</button> : null}
         </div>
