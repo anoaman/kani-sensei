@@ -1689,7 +1689,7 @@ def _extra_vocab(db, level, characters):
     return [_catalog_item(row) for row in rows]
 
 
-def _insert_passage(db, passage_id, kind, level, day, idx, title, sentences, covers):
+def _insert_passage(db, passage_id, kind, level, day, idx, title, sentences, covers, plan_version=None):
     db.execute(
         """
         insert into reading_passages
@@ -1706,7 +1706,7 @@ def _insert_passage(db, passage_id, kind, level, day, idx, title, sentences, cov
             title,
             json.dumps(sentences, ensure_ascii=False),
             [int(item) for item in covers],
-            PLAN_VERSION,
+            PLAN_VERSION if plan_version is None else int(plan_version),
         ],
     )
 
