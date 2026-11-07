@@ -5,9 +5,12 @@ GET  /api/read?action=level&level=N    passages for one level
 GET  /api/read?action=passage&id=...   one annotated passage
 GET  /api/read?action=daily            today's read, built on first open
 GET  /api/read?action=web&level=N      Kanji Web for one level
+GET  /api/read?action=feed&offset=N    one just-right sentence
+GET  /api/read?action=search&q=        look up the catalog by kanji, kana, romaji, or meaning
 POST /api/read?action=lookup           {passage_id, subject_id}
+POST /api/read?action=feed             {subject_id}  Again on the feed
 POST /api/read?action=dictation        {passage_id, index, text}
-POST /api/read?action=finish           {passage_id, quiz_correct, quiz_total, listen_correct, listen_total}
+POST /api/read?action=finish           {passage_id, quiz_correct, quiz_total, listen_correct, listen_total, recall_correct, recall_total}
 POST /api/read?action=custom           {text, title?}
 """
 
@@ -22,14 +25,19 @@ from shared.kanji_web import fetch_web
 from shared.neon import NeonClient
 from shared.reader import (
     CatalogMissing,
+    IndexMissing,
     build_daily_read,
     fetch_index,
     fetch_level_view,
+    fetch_feed,
     finish_passage,
     grade_passage_dictation,
     note_lookup,
+    record_feed_again,
     render_passage,
+    require_index,
     save_custom,
+    search_catalog,
 )
 
 
@@ -55,6 +63,7 @@ class handler(BaseHTTPRequestHandler):
         try:
             db = self._db()
             with db.reuse():
+                require_index(db)
                 if action == "index":
                     body = fetch_index(db)
                 elif action == "level":
@@ -68,11 +77,17 @@ class handler(BaseHTTPRequestHandler):
                     body = build_daily_read(db)
                 elif action == "web":
                     body = fetch_web(db, _level(query.get("level", [None])[0]))
+                elif action == "feed":
+                    body = fetch_feed(db, query.get("offset", ["0"])[0])
+                elif action == "search":
+                    body = search_catalog(db, query.get("q", [""])[0])
                 else:
                     raise ValueError("unknown action")
             respond(self, 200, body)
         except CatalogMissing:
             respond(self, 409, {"error": "catalog_missing"})
+        except IndexMissing:
+            respond(self, 409, {"error": "index_missing"})
         except (TypeError, ValueError) as exc:
             respond(self, 400, {"error": str(exc)})
         except Exception as exc:
@@ -86,6 +101,7 @@ class handler(BaseHTTPRequestHandler):
             body = read_json_body(self)
             db = self._db()
             with db.reuse():
+                require_index(db)
                 passage_id = body.get("passage_id")
                 if action == "lookup":
                     if not passage_id or body.get("subject_id") is None:
@@ -105,14 +121,22 @@ class handler(BaseHTTPRequestHandler):
                         body.get("quiz_total"),
                         body.get("listen_correct"),
                         body.get("listen_total"),
+                        body.get("recall_correct"),
+                        body.get("recall_total"),
                     )
                 elif action == "custom":
                     result = save_custom(db, body.get("text"), body.get("title"))
+                elif action == "feed":
+                    if body.get("subject_id") is None:
+                        raise ValueError("subject_id is required")
+                    result = record_feed_again(db, body.get("subject_id"))
                 else:
                     raise ValueError("unknown action")
             respond(self, 200, result)
         except CatalogMissing:
             respond(self, 409, {"error": "catalog_missing"})
+        except IndexMissing:
+            respond(self, 409, {"error": "index_missing"})
         except (TypeError, ValueError, KeyError) as exc:
             respond(self, 400, {"error": str(exc)})
         except Exception as exc:

@@ -4,7 +4,7 @@ import { api } from "./api.js";
 export function CatalogNote() {
   return (
     <div className="error">
-      Readings need the full WaniKani catalog. After this is deployed, run the catalog sync once
+      Readings need the full WaniKani catalog and its sentence index. Run the catalog sync once
       (<code>POST /api/sync?scope=catalog</code> with the <code>X-Cron-Secret</code> header), then reload.
     </div>
   );
@@ -50,6 +50,12 @@ export default function ReadIndex({ go }) {
       {!data && !missing ? <p className="muted">Loading…</p> : null}
       {data ? (
         <>
+          <button type="button" className="today-read" onClick={() => go("/read/feed")}>
+            <p className="kicker">Just right</p>
+            <strong>One new word at a time</strong>
+            <span>A sentence you can almost read</span>
+          </button>
+
           <button type="button" className="today-read" onClick={() => go("/read/today")}>
             <p className="kicker">Today's read</p>
             <strong>{data.daily?.finished ? "✓ Read for today" : "Read today's words in context"}</strong>

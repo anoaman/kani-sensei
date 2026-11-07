@@ -4,11 +4,25 @@
     "sin1"
   ],
   "functions": {
+    "api/sync.py": {
+      "includeFiles": "shared/**",
+      "maxDuration": 300
+    },
     "api/*.py": {
       "includeFiles": "shared/**",
       "maxDuration": 60
     }
   },
+  "crons": [
+    {
+      "path": "/api/sync",
+      "schedule": "0 21 * * *"
+    },
+    {
+      "path": "/api/sync?scope=catalog",
+      "schedule": "0 22 * * 0"
+    }
+  ],
   "rewrites": [
     {
       "source": "/((?!api/).*)",

@@ -85,8 +85,46 @@ SCHEMA_STATEMENTS = (
         quiz_total      integer,
         listen_correct  integer,
         listen_total    integer,
+        recall_correct  integer,
+        recall_total    integer,
         updated_at      timestamptz
     )
+    """,
+    """
+    create table if not exists reading_sentences (
+        source_id   bigint not null,
+        idx         integer not null,
+        ja          text not null,
+        en          text not null default '',
+        level       integer not null,
+        word_ids    bigint[] not null default '{}',
+        kanji_ids   bigint[] not null default '{}',
+        max_level   integer not null,
+        listenable  boolean not null default false,
+        primary key (source_id, idx)
+    )
+    """,
+    """
+    create index if not exists reading_sentences_words_idx
+        on reading_sentences using gin (word_ids)
+    """,
+    """
+    create index if not exists reading_sentences_kanji_idx
+        on reading_sentences using gin (kanji_ids)
+    """,
+    """
+    create index if not exists reading_sentences_max_level_idx
+        on reading_sentences (max_level)
+    """,
+)
+
+# Runs even when the tables already exist. CREATE TABLE is skipped in that case,
+# so new columns have to be added on their own.
+SCHEMA_ALTERS = (
+    """
+    alter table reading_progress
+        add column if not exists recall_correct integer,
+        add column if not exists recall_total integer
     """,
 )
 
@@ -98,13 +136,17 @@ def ensure_schema(db):
     global _SCHEMA_READY
     if _SCHEMA_READY:
         return
+    ready = False
     try:
-        if db.has_relation("public.wk_catalog"):
-            _SCHEMA_READY = True
-            return
+        # Key off the newest table. wk_catalog already exists in production,
+        # and an early return there would skip every later CREATE.
+        ready = bool(db.has_relation("public.reading_sentences"))
     except Exception:
-        pass
-    for statement in SCHEMA_STATEMENTS:
+        ready = False
+    if not ready:
+        for statement in SCHEMA_STATEMENTS:
+            db.execute(statement)
+    for statement in SCHEMA_ALTERS:
         db.execute(statement)
     _SCHEMA_READY = True
 
@@ -713,6 +755,10 @@ class CatalogMissing(LookupError):
     """wk_catalog has not been synced yet."""
 
 
+class IndexMissing(LookupError):
+    """reading_sentences has not been built yet."""
+
+
 def _norm(text):
     return (text or "").strip().casefold()
 
@@ -975,6 +1021,43 @@ def split_passage_text(text):
     return parts[:MAX_CUSTOM_SENTENCES]
 
 
+def kanji_from_radicals(radicals, kanji, max_level):
+    """Kanji at or below max_level that these radicals build.
+
+    A kanji counts when a radical lists it in amalgamation_ids, or the kanji
+    lists that radical in component_ids.
+    """
+    radical_ids = {int(item["id"]) for item in radicals or [] if item.get("id") is not None}
+    listed = set()
+    for item in radicals or []:
+        for child in item.get("amalgamation_ids") or []:
+            try:
+                listed.add(int(child))
+            except (TypeError, ValueError):
+                continue
+    chosen = []
+    for item in kanji or []:
+        if item.get("type") not in (None, "kanji"):
+            continue
+        try:
+            level = int(item.get("level") or 0)
+            subject_id = int(item["id"])
+        except (TypeError, ValueError):
+            continue
+        if level > int(max_level):
+            continue
+        components = set()
+        for part in item.get("component_ids") or []:
+            try:
+                components.add(int(part))
+            except (TypeError, ValueError):
+                continue
+        if subject_id in listed or components & radical_ids:
+            chosen.append(item)
+    chosen.sort(key=lambda item: (int(item.get("level") or 0), int(item["id"])))
+    return chosen
+
+
 def candidates_from_rows(rows, lexicon, target_ids, reference_level):
     found = []
     seen = set()
@@ -1054,6 +1137,410 @@ def require_catalog(db):
         raise CatalogMissing("catalog_missing")
 
 
+def index_rows_for_subject(subject, lexicon):
+    """One reading_sentences row per context sentence of a catalog subject.
+
+    word_ids are matched vocabulary, in order, without duplicates. kanji_ids
+    include standalone kanji and the kanji inside those words. max_level is
+    the highest matched token, or the source level when nothing matched.
+    """
+    sentences = subject.get("context_sentences")
+    if sentences is None:
+        sentences = subject.get("sentences") or []
+    source_id = int(subject["id"])
+    source_level = int(subject.get("level") or 0)
+    rows = []
+    for idx, sentence in enumerate(sentences or []):
+        if isinstance(sentence, str):
+            ja, en = sentence.strip(), ""
+        elif isinstance(sentence, dict):
+            ja = (sentence.get("ja") or "").strip()
+            en = (sentence.get("en") or "").strip()
+        else:
+            continue
+        if not ja:
+            continue
+        annotated = annotate_sentence(ja, lexicon, prefer=source_id)
+        word_ids = []
+        seen_words = set()
+        kanji_ids = []
+        seen_kanji = set()
+        levels = []
+
+        def _take_kanji(char):
+            entry = lexicon.kanji.get(char)
+            if not entry:
+                return
+            kanji_id = int(entry["id"])
+            if kanji_id in seen_kanji:
+                return
+            seen_kanji.add(kanji_id)
+            kanji_ids.append(kanji_id)
+            if entry.get("level") is not None:
+                levels.append(int(entry["level"]))
+
+        for token in annotated["tokens"]:
+            subject_id = token.get("subject_id")
+            if token["kind"] == "word" and subject_id is not None:
+                word_id = int(subject_id)
+                if word_id not in seen_words:
+                    seen_words.add(word_id)
+                    word_ids.append(word_id)
+                if token.get("level") is not None:
+                    levels.append(int(token["level"]))
+                for char in token.get("text") or "":
+                    if is_kanji(char):
+                        _take_kanji(char)
+            elif token["kind"] == "kanji" and subject_id is not None:
+                kanji_id = int(subject_id)
+                if kanji_id not in seen_kanji:
+                    seen_kanji.add(kanji_id)
+                    kanji_ids.append(kanji_id)
+                if token.get("level") is not None:
+                    levels.append(int(token["level"]))
+        rows.append({
+            "source_id": source_id,
+            "idx": idx,
+            "ja": ja,
+            "en": en,
+            "level": source_level,
+            "word_ids": word_ids,
+            "kanji_ids": kanji_ids,
+            "max_level": max(levels) if levels else source_level,
+            "listenable": bool(annotated["listenable"]),
+        })
+    return rows
+
+
+SENTENCE_CHUNK = 1000
+
+_SENTENCE_UPSERT = """
+insert into reading_sentences
+    (source_id, idx, ja, en, level, word_ids, kanji_ids, max_level, listenable)
+select source_id, idx, ja, en, level, word_ids, kanji_ids, max_level, listenable
+from jsonb_to_recordset(%s::jsonb) as row(
+    source_id bigint,
+    idx integer,
+    ja text,
+    en text,
+    level integer,
+    word_ids bigint[],
+    kanji_ids bigint[],
+    max_level integer,
+    listenable boolean
+)
+on conflict (source_id, idx) do update set
+    ja = excluded.ja,
+    en = excluded.en,
+    level = excluded.level,
+    word_ids = excluded.word_ids,
+    kanji_ids = excluded.kanji_ids,
+    max_level = excluded.max_level,
+    listenable = excluded.listenable
+"""
+
+
+def rebuild_sentence_index(db):
+    """Replace reading_sentences from every catalog context sentence. One pass."""
+    ensure_schema(db)
+    lexicon = load_lexicon(db)
+    rows = db.execute(
+        """
+        select id, level, context_sentences
+        from wk_catalog
+        where context_sentences <> '[]'::jsonb
+        """,
+        fetch=True,
+    )
+    indexed = []
+    for source_id, level, sentences in rows:
+        indexed.extend(index_rows_for_subject(
+            {"id": int(source_id), "level": int(level or 0), "context_sentences": _json(sentences, [])},
+            lexicon,
+        ))
+    db.execute("truncate reading_sentences")
+    for start in range(0, len(indexed), SENTENCE_CHUNK):
+        batch = indexed[start:start + SENTENCE_CHUNK]
+        db.execute(_SENTENCE_UPSERT, [json.dumps(batch, ensure_ascii=False)])
+    return len(indexed)
+
+
+def sentence_index_ready(db):
+    ensure_schema(db)
+    if not _has(db, "public.reading_sentences"):
+        return False
+    rows = db.execute("select 1 from reading_sentences limit 1", fetch=True)
+    return bool(rows)
+
+
+def require_index(db):
+    require_catalog(db)
+    if not sentence_index_ready(db):
+        raise IndexMissing("index_missing")
+
+
+def unknown_word(word_ids, levels_by_id, stages, user_level):
+    """The single below-Guru word, when every word is in levels 1..user_level.
+
+    A missing stage counts as unknown. Any other count, or a word outside
+    that range, is not a just-right sentence. fetch_feed's SQL matches this.
+    """
+    if not word_ids:
+        return None
+    unknown = None
+    ceiling = int(user_level)
+    for word_id in word_ids:
+        word_id = int(word_id)
+        level = levels_by_id.get(word_id)
+        if level is None or int(level) < 1 or int(level) > ceiling:
+            return None
+        stage = stages.get(word_id, 0) if stages else 0
+        try:
+            stage = int(stage or 0)
+        except (TypeError, ValueError):
+            stage = 0
+        if stage < GURU:
+            if unknown is not None:
+                return None
+            unknown = word_id
+    return unknown
+
+
+def _stage_source_sql(db):
+    """Course stage overrides the WaniKani assignment, matching fetch_stages."""
+    parts = []
+    if _has(db, "public.wk_assignments"):
+        parts.append("select subject_id, srs_stage, 1 as src from wk_assignments")
+    if _has(db, "public.course_items"):
+        parts.append("select subject_id, srs_stage, 2 as src from course_items")
+    if not parts:
+        return "select null::bigint as subject_id, 0::int as srs_stage where false"
+    joined = " union all ".join(parts)
+    return (
+        "select distinct on (subject_id) subject_id, srs_stage "
+        f"from ({joined}) raw order by subject_id, src desc"
+    )
+
+
+def fetch_feed(db, offset=0):
+    """One just-right sentence for today. Order is seeded by the WIB day."""
+    from shared.daily import today as wib_today
+
+    require_index(db)
+    try:
+        offset = int(offset or 0)
+    except (TypeError, ValueError):
+        raise ValueError("offset must be a number")
+    if offset < 0:
+        raise ValueError("offset must be zero or more")
+    reached = user_level(db)
+    day = wib_today()
+    seed = day.isoformat()
+    picked = f"""
+        select s.source_id, s.idx, s.ja, s.en, s.word_ids, u.unknown_id
+        from reading_sentences s
+        join lateral (
+            select
+                count(*) as seen,
+                count(*) filter (where c.level < 1 or c.level > %s) as above,
+                count(*) filter (where coalesce(st.srs_stage, 0) < {GURU}) as unknown_count,
+                (array_agg(w.word_id order by w.ord)
+                    filter (where coalesce(st.srs_stage, 0) < {GURU}))[1] as unknown_id
+            from unnest(s.word_ids) with ordinality as w(word_id, ord)
+            join wk_catalog c on c.id = w.word_id
+            left join stage st on st.subject_id = w.word_id
+        ) u on u.seen = cardinality(s.word_ids)
+           and u.above = 0
+           and u.unknown_count = 1
+        where s.max_level between 1 and %s
+          and cardinality(s.word_ids) >= 1
+    """
+    sql = f"""
+        with stage as ({_stage_source_sql(db)}),
+        picked as ({picked})
+        select source_id, idx, ja, en, word_ids, unknown_id, count(*) over () as total
+        from picked
+        order by md5(source_id::text || ':' || idx::text || ':' || %s)
+        offset %s
+        limit 1
+    """
+    rows = db.execute(sql, [reached, reached, seed, offset], fetch=True)
+    if not rows:
+        total = db.execute(
+            f"with stage as ({_stage_source_sql(db)}), picked as ({picked}) select count(*) from picked",
+            [reached, reached],
+            fetch=True,
+        )
+        return {
+            "empty": True,
+            "day": seed,
+            "offset": offset,
+            "total": int(total[0][0] if total else 0),
+        }
+    source_id, idx, ja, en, word_ids, unknown_id, total = rows[0]
+    unknown_id = int(unknown_id)
+    lexicon = load_lexicon(db)
+    annotated = annotate_sentence(
+        ja,
+        lexicon,
+        prefer=int(source_id),
+        stages=fetch_stages(db, [int(item) for item in (word_ids or [])] + [unknown_id]),
+        reference_level=reached,
+        targets={unknown_id},
+    )
+    return {
+        "empty": False,
+        "day": seed,
+        "offset": offset,
+        "total": int(total),
+        "unknown_id": unknown_id,
+        "sentence": {
+            "ja": ja,
+            "en": en or "",
+            "source_id": int(source_id),
+            "idx": int(idx),
+            "kana": annotated["kana"],
+            "listenable": annotated["listenable"],
+            "tokens": annotated["tokens"],
+        },
+    }
+
+
+def search_needles(query):
+    """The literal query plus its hiragana form, when romaji or katakana was typed."""
+    text = (query or "").strip()
+    if not text:
+        return []
+    text = text[:40]
+    reading = normalize_reading(text)
+    needles = [text]
+    if reading and reading.casefold() != text.casefold():
+        needles.append(reading)
+    return needles
+
+
+def _like_pattern(text):
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def match_rank(needles, item):
+    """Sort key for a catalog hit. None when none of the needles appear."""
+    folded = []
+    for needle in needles or []:
+        if needle and needle not in folded:
+            folded.append(needle)
+    if not folded:
+        return None
+    characters = item.get("characters") or ""
+    meaning = item.get("meaning") or ""
+    meanings = " ".join(str(part) for part in (item.get("meanings") or []) if part)
+    reading_bits = []
+    for reading in item.get("readings") or []:
+        if not reading:
+            continue
+        reading_bits.append(str(reading))
+        reading_bits.append(normalize_reading(str(reading)))
+    readings = " ".join(reading_bits)
+    order = (int(item.get("level") or 0), int(item.get("id") or 0))
+    if any(characters == needle or characters.casefold() == needle.casefold() for needle in folded):
+        return (0, *order)
+    if any(needle and characters.casefold().startswith(needle.casefold()) for needle in folded):
+        return (1, *order)
+    if any(
+        needle.casefold() in characters.casefold()
+        or needle.casefold() in readings.casefold()
+        or normalize_reading(needle).casefold() in readings.casefold()
+        for needle in folded
+    ):
+        return (2, *order)
+    if any(needle.casefold() in meaning.casefold() or needle.casefold() in meanings.casefold() for needle in folded):
+        return (3, *order)
+    return None
+
+
+def search_catalog(db, query, limit=8):
+    """Look up kanji, kana, romaji, or an English meaning in the full catalog."""
+    require_catalog(db)
+    needles = search_needles(query)
+    if not needles:
+        return {"query": "", "results": []}
+    clauses = []
+    args = []
+    for needle in needles:
+        pattern = _like_pattern(needle)
+        clauses.append(
+            "(characters ilike %s escape '\\' or primary_meaning ilike %s escape '\\' "
+            "or meanings::text ilike %s escape '\\' or readings::text ilike %s escape '\\')"
+        )
+        args.extend([pattern, pattern, pattern, pattern])
+    args.append(needles)
+    rows = db.execute(
+        f"""
+        select id, object_type, level, characters, primary_meaning, meanings, readings
+        from wk_catalog
+        where characters is not null and characters <> ''
+          and ({" or ".join(clauses)})
+        order by (characters = any(%s)) desc, char_length(characters), level, id
+        limit 80
+        """,
+        args,
+        fetch=True,
+    )
+    ranked = []
+    for row in rows:
+        meaning_values = _json(row[5], [])
+        meanings = [part for part in meaning_values if isinstance(part, str)] if isinstance(meaning_values, list) else []
+        reading_texts = []
+        for entry in _json(row[6], []):
+            if isinstance(entry, dict) and entry.get("reading"):
+                reading_texts.append(entry["reading"])
+            elif isinstance(entry, str):
+                reading_texts.append(entry)
+        item = {
+            "id": int(row[0]),
+            "type": row[1],
+            "level": int(row[2] or 0),
+            "characters": row[3] or "",
+            "meaning": row[4] or "",
+            "meanings": meanings,
+            "readings": reading_texts,
+        }
+        rank = match_rank(needles, item)
+        if rank is None:
+            continue
+        ranked.append((rank, item))
+    ranked.sort(key=lambda pair: pair[0])
+    results = []
+    for _rank, item in ranked[: int(limit)]:
+        results.append({
+            "id": item["id"],
+            "type": item["type"],
+            "level": item["level"],
+            "characters": item["characters"],
+            "meaning": item["meaning"],
+            "reading": item["readings"][0] if item["readings"] else "",
+        })
+    return {"query": needles[0], "results": results}
+
+
+def record_feed_again(db, subject_id):
+    """Again on the feed is a lookup, and a lookup of a started word is a drill miss."""
+    require_index(db)
+    subject_id = int(subject_id)
+    rows = db.execute("select level from wk_catalog where id = %s", [subject_id], fetch=True)
+    if not rows:
+        raise ValueError("subject not found")
+    item_level = int(rows[0][0] or 0)
+    stage = fetch_stages(db, [subject_id]).get(subject_id, 0)
+    recorded = False
+    if stage >= 1 and item_level <= user_level(db):
+        from shared.drill import record_lookup
+        record_lookup(db, subject_id)
+        recorded = True
+    return {"ok": True, "recorded_miss": recorded, "subject_id": subject_id}
+
+
 def user_level(db):
     if not _has(db, "public.wk_subjects"):
         return 1
@@ -1084,6 +1571,69 @@ def load_lexicon(db):
     lexicon = build_lexicon(entries)
     cache_put("reader:lexicon", lexicon)
     return lexicon
+
+
+def known_ratio(word_ids, stages):
+    """Share of distinct words at Guru or above. None when there is nothing to count."""
+    unique = []
+    seen = set()
+    for word_id in word_ids or []:
+        if word_id is None:
+            continue
+        word_id = int(word_id)
+        if word_id in seen:
+            continue
+        seen.add(word_id)
+        unique.append(word_id)
+    if not unique:
+        return None
+    known = 0
+    for word_id in unique:
+        stage = (stages or {}).get(word_id, 0) or 0
+        try:
+            stage = int(stage)
+        except (TypeError, ValueError):
+            stage = 0
+        if stage >= GURU:
+            known += 1
+    return {"known": known, "total": len(unique), "ratio": known / len(unique)}
+
+
+def known_for_groups(db, groups):
+    """Known-word ratio for each group of saved sentences, from the index."""
+    wanted = []
+    for group in groups or []:
+        for sentence in group or []:
+            source_id = sentence.get("source_id") if isinstance(sentence, dict) else None
+            ja = sentence.get("ja") if isinstance(sentence, dict) else None
+            if source_id and ja:
+                wanted.append((int(source_id), ja))
+    by_key = {}
+    if wanted and _has(db, "public.reading_sentences"):
+        rows = db.execute(
+            """
+            select source_id, ja, word_ids
+            from reading_sentences
+            where source_id = any(%s)
+            """,
+            [sorted({source_id for source_id, _ja in wanted})],
+            fetch=True,
+        )
+        for source_id, ja, word_ids in rows:
+            bucket = by_key.setdefault((int(source_id), ja), [])
+            bucket.extend(int(item) for item in (word_ids or []))
+    grouped = []
+    flat = []
+    for group in groups or []:
+        ids = []
+        for sentence in group or []:
+            if not isinstance(sentence, dict) or not sentence.get("source_id") or not sentence.get("ja"):
+                continue
+            ids.extend(by_key.get((int(sentence["source_id"]), sentence["ja"]), []))
+        grouped.append(ids)
+        flat.extend(ids)
+    stages = fetch_stages(db, flat)
+    return [known_ratio(ids, stages) for ids in grouped]
 
 
 def fetch_stages(db, ids):
@@ -1504,6 +2054,7 @@ def render_passage(db, passage_id, mark_opened=True):
         "questions": questions,
         "progress": progress,
         "reference_level": reference,
+        "known": known_for_groups(db, [sentences])[0],
     }
 
 
@@ -1526,18 +2077,23 @@ def fetch_level_view(db, level):
         fetch=True,
     )
     passages = []
+    sentence_groups = []
     covered = set()
     for passage_id, idx, title, sentences_raw, covers_raw, opened, finished in rows:
         covers = [int(item) for item in (covers_raw or [])]
         covered.update(covers)
+        sentence_rows = _json(sentences_raw, [])
+        sentence_groups.append(sentence_rows)
         passages.append({
             "id": passage_id,
             "idx": int(idx) if idx else None,
             "title": title,
-            "sentences": len(_json(sentences_raw, [])),
+            "sentences": len(sentence_rows),
             "opened": bool(opened),
             "finished": bool(finished),
         })
+    for passage, known in zip(passages, known_for_groups(db, sentence_groups)):
+        passage["known"] = known
     items = _level_items(db, level)
     uncovered = [
         {"id": item["id"], "characters": item["characters"], "meaning": item["meaning"], "type": item["type"]}
@@ -1684,8 +2240,48 @@ def _vocab_containing(db, low, high, characters, exclude_ids):
     return [_catalog_item(row) for row in rows]
 
 
+def _kanji_built_from(db, radical_ids, max_level):
+    radical_ids = [int(item) for item in radical_ids or []]
+    if not radical_ids:
+        return []
+    radical_rows = db.execute(
+        "select id, amalgamation_ids from wk_catalog where id = any(%s) and object_type = 'radical'",
+        [radical_ids],
+        fetch=True,
+    )
+    radicals = [
+        {"id": int(row[0]), "amalgamation_ids": [int(item) for item in (row[1] or [])]}
+        for row in radical_rows
+    ]
+    listed = sorted({int(child) for item in radicals for child in item["amalgamation_ids"]})
+    rows = db.execute(
+        """
+        select id, object_type, level, characters, primary_meaning, meanings, readings,
+               context_sentences, lesson_position, component_ids
+        from wk_catalog
+        where object_type = 'kanji'
+          and level <= %s
+          and characters is not null and characters <> ''
+          and (id = any(%s) or component_ids && %s::bigint[])
+        order by level, lesson_position nulls last, id
+        """,
+        [max_level, listed or [0], radical_ids],
+        fetch=True,
+    )
+    kanji = []
+    for row in rows:
+        item = _catalog_item(row[:9])
+        item["component_ids"] = [int(part) for part in (row[9] or [])]
+        kanji.append(item)
+    return kanji_from_radicals(radicals, kanji, max_level)
+
+
 def build_daily_read(db):
-    """One passage from today's set, frozen for the WIB day. Radicals-only sets are empty."""
+    """One passage from today's set, frozen for the WIB day.
+
+    A radicals-only set is read through the kanji those radicals build.
+    Empty only when nothing usable turns up.
+    """
     from shared.daily import fetch_daily, today as wib_today
 
     require_catalog(db)
@@ -1699,10 +2295,14 @@ def build_daily_read(db):
     subject_ids = [int(item) for item in ((rows[0][0] if rows else []) or [])]
     items = _items_with_sentences(db, subject_ids)
     targets = [item for item in items if item["type"] in TARGET_TYPES]
+    reached = user_level(db)
+    title = "Today's read"
+    if not targets:
+        radical_ids = [item["id"] for item in items if item.get("type") == "radical"]
+        targets = _kanji_built_from(db, radical_ids, reached)
+        title = "Built from today's radicals"
     if not targets:
         return {"empty": True, "id": passage_id, "day": day.isoformat(), "kind": "daily"}
-
-    reached = user_level(db)
     lexicon = load_lexicon(db)
     target_ids = {item["id"] for item in targets}
     primary = candidates_from_rows(
@@ -1728,7 +2328,7 @@ def build_daily_read(db):
         {"ja": candidate["ja"], "en": candidate["en"], "source_id": candidate["source_id"]}
         for candidate in chunk
     ]
-    _insert_passage(db, passage_id, "daily", reached, day, 1, "Today's read", sentences, covers)
+    _insert_passage(db, passage_id, "daily", reached, day, 1, title, sentences, covers)
     return render_passage(db, passage_id)
 
 
@@ -1784,7 +2384,16 @@ def grade_passage_dictation(db, passage_id, index, text):
     return graded
 
 
-def finish_passage(db, passage_id, quiz_correct, quiz_total, listen_correct, listen_total):
+def finish_passage(
+    db,
+    passage_id,
+    quiz_correct,
+    quiz_total,
+    listen_correct,
+    listen_total,
+    recall_correct=None,
+    recall_total=None,
+):
     row = _passage_tuple(db, passage_id)
     if not row:
         raise ValueError("passage not found")
@@ -1801,22 +2410,35 @@ def finish_passage(db, passage_id, quiz_correct, quiz_total, listen_correct, lis
     quiz_total = _count(quiz_total)
     listen_correct = _count(listen_correct)
     listen_total = _count(listen_total)
+    recall_correct = _count(recall_correct)
+    recall_total = _count(recall_total)
     db.execute(
         """
         insert into reading_progress (
           passage_id, opened_at, finished_at,
-          quiz_correct, quiz_total, listen_correct, listen_total, updated_at
+          quiz_correct, quiz_total, listen_correct, listen_total,
+          recall_correct, recall_total, updated_at
         )
-        values (%s, now(), now(), %s, %s, %s, %s, now())
+        values (%s, now(), now(), %s, %s, %s, %s, %s, %s, now())
         on conflict (passage_id) do update set
           finished_at = coalesce(reading_progress.finished_at, now()),
           quiz_correct = excluded.quiz_correct,
           quiz_total = excluded.quiz_total,
           listen_correct = excluded.listen_correct,
           listen_total = excluded.listen_total,
+          recall_correct = excluded.recall_correct,
+          recall_total = excluded.recall_total,
           updated_at = now()
         """,
-        [passage_id, quiz_correct, quiz_total, listen_correct, listen_total],
+        [
+            passage_id,
+            quiz_correct,
+            quiz_total,
+            listen_correct,
+            listen_total,
+            recall_correct,
+            recall_total,
+        ],
     )
     clear_cache()
     kind = row[1]

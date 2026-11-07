@@ -9,6 +9,9 @@ import ReadIndex from "./ReadIndex.jsx";
 import ReadLevel from "./ReadLevel.jsx";
 import Reader from "./Reader.jsx";
 import KanjiWeb from "./KanjiWeb.jsx";
+import ReadFeed from "./ReadFeed.jsx";
+import SearchBox from "./SearchBox.jsx";
+import { InspectDrawer } from "./InspectCard.jsx";
 
 // /level/N/continue: jump to whatever that level needs most, else its page.
 function ContinueRoute({ level, go }) {
@@ -47,6 +50,7 @@ function viewFromPath(pathname) {
   if (pathname.startsWith("/today")) return "today";
   if (pathname.startsWith("/gate")) return "gate";
   if (pathname.startsWith("/read/today")) return "read-today";
+  if (pathname.startsWith("/read/feed")) return "read-feed";
   if (pathname.startsWith("/read/level/")) return "read-level";
   if (pathname.startsWith("/read/p/")) return "read-passage";
   if (pathname === "/read" || pathname.startsWith("/read/")) return "read";
@@ -183,6 +187,7 @@ export default function App() {
   const [focus, setFocus] = useState(false);
   const [customize, setCustomize] = useState(() => wantsCustomize(window.location.pathname));
   const [error, setError] = useState("");
+  const [lookup, setLookup] = useState(null);
 
   async function load() {
     setError("");
@@ -242,6 +247,7 @@ export default function App() {
         <button className="brand-mark" onClick={() => navigate("dojo")}><span className="seal" lang="ja">先</span><strong>Kani Sensei</strong></button>
         {!focus ? (
           <div className="topbar-meta">
+            <SearchBox onOpen={setLookup} />
             <button className="pill-btn" onClick={() => navigate("/read")}>Read</button>
             <button className="pill-btn" onClick={() => navigate("/levels")}>Levels</button>
             <button className="pill-btn" onClick={() => setCustomize(true)}>Customize <kbd className="wide-only">⌘K</kbd></button>
@@ -260,12 +266,14 @@ export default function App() {
       {view === "today" ? <CourseSession key={pathname} daily go={navigate} onFocus={setFocus} /> : null}
       {view === "continue" ? <ContinueRoute key={pathname} level={levelFromPath(pathname)} go={navigate} /> : null}
       {view === "read" ? <ReadIndex go={navigate} /> : null}
+      {view === "read-feed" ? <ReadFeed go={navigate} /> : null}
       {view === "read-level" ? <ReadLevel key={pathname} level={readLevelFromPath(pathname)} go={navigate} /> : null}
       {view === "web" ? <KanjiWeb key={pathname} level={webLevelFromPath(pathname)} go={navigate} /> : null}
       {view === "read-passage" || view === "read-today" ? (
         <Reader key={pathname} daily={view === "read-today"} passageId={passageIdFromPath(pathname)} go={navigate} />
       ) : null}
       {customize && !focus ? <Customize data={data} navigate={navigate} onClose={() => setCustomize(false)} /> : null}
+      {lookup ? <InspectDrawer subjectId={lookup} onClose={() => setLookup(null)} /> : null}
     </div>
   );
 }

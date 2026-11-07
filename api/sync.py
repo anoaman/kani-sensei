@@ -5,7 +5,9 @@ statistics, and assignments, then upserts them into Neon/Postgres. Idempotent: e
 table upserts on its primary key, so a daily re-run just refreshes the snapshot.
 Writes one sync_runs audit row (open 'running' -> close 'ok'/'error').
 
-Protected by X-Cron-Secret (same pattern as api/tick.py). Hit daily by cron-job.org.
+Protected by X-Cron-Secret (cron-job.org) or Authorization: Bearer CRON_SECRET
+(Vercel Cron, which calls GET). Hit daily for the unlocked snapshot and
+weekly for the full catalog.
 
 Env required: WANIKANI_API_KEY, DATABASE_URL, CRON_SECRET
 """
@@ -21,7 +23,11 @@ from shared.auth import query_params
 from shared.cache import clear as clear_cache
 from shared.wanikani_client import WaniKaniClient
 from shared.neon import NeonClient
-from shared.reader import ensure_schema as ensure_reader_schema, map_catalog_item
+from shared.reader import (
+    ensure_schema as ensure_reader_schema,
+    map_catalog_item,
+    rebuild_sentence_index,
+)
 
 CHUNK = 100
 CATALOG_CHUNK = 1000
@@ -247,11 +253,11 @@ def run_catalog_sync(wk_token, db):
         for start in range(0, len(rows), CATALOG_CHUNK):
             batch = rows[start:start + CATALOG_CHUNK]
             db.execute(CATALOG_UPSERT, [json.dumps(batch, ensure_ascii=False)])
-        counts = {"catalog": len(rows)}
+        clear_cache()
+        counts = {"catalog": len(rows), "sentences": rebuild_sentence_index(db)}
         db.execute(
             "update sync_runs set status='ok', finished_at=%s, counts=%s::jsonb where id=%s",
             [_now_iso(), json.dumps(counts), run_id])
-        clear_cache()
         return counts
     except Exception as e:
         try:
@@ -261,6 +267,19 @@ def run_catalog_sync(wk_token, db):
         except Exception:
             pass
         raise
+
+
+def cron_authorized(header_secret, authorization, cron_secret):
+    """True when the caller presented CRON_SECRET as a header or a bearer token."""
+    if not cron_secret:
+        return False
+    if header_secret and header_secret == cron_secret:
+        return True
+    token = (authorization or "").strip()
+    prefix = "Bearer "
+    if token.startswith(prefix) and token[len(prefix):] == cron_secret:
+        return True
+    return False
 
 
 def last_good_sync(db):
@@ -280,7 +299,13 @@ def last_good_sync(db):
 
 
 class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self._sync()
+
     def do_POST(self):
+        self._sync()
+
+    def _sync(self):
         wk_token = os.environ.get("WANIKANI_API_KEY")
         database_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
         cron_secret = os.environ.get("CRON_SECRET")
@@ -290,7 +315,11 @@ class handler(BaseHTTPRequestHandler):
             self._respond(500, {"error": "missing_env_vars"})
             return
 
-        if self.headers.get("X-Cron-Secret") != cron_secret:
+        if not cron_authorized(
+            self.headers.get("X-Cron-Secret"),
+            self.headers.get("Authorization"),
+            cron_secret,
+        ):
             self._respond(401, {"error": "unauthorized"})
             return
 

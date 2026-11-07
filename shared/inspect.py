@@ -108,6 +108,49 @@ def wk_url(object_type, characters, slug=None):
     return f"https://www.wanikani.com/{kind}/{token}"
 
 
+def catalog_card_inputs(row):
+    """Turn a wk_catalog row into build_inspect_card inputs.
+
+    The catalog keeps accepted meanings as strings and a single audio URL.
+    It does not store mnemonics.
+    """
+    primary = row.get("primary_meaning")
+    meaning_objs = []
+    for item in row.get("meanings") or []:
+        if isinstance(item, dict):
+            meaning_objs.append(item)
+            continue
+        text = str(item or "").strip()
+        if text:
+            meaning_objs.append({
+                "meaning": text,
+                "primary": text == primary,
+                "accepted_answer": True,
+            })
+    audio = row.get("audio_url")
+    raw = {
+        "parts_of_speech": row.get("parts_of_speech") or [],
+        "context_sentences": row.get("context_sentences") or [],
+        "component_subject_ids": [int(item) for item in (row.get("component_ids") or [])],
+        "visually_similar_subject_ids": [int(item) for item in (row.get("similar_ids") or [])],
+        "amalgamation_subject_ids": [int(item) for item in (row.get("amalgamation_ids") or [])],
+        "pronunciation_audios": (
+            [{"url": audio, "content_type": "audio/mpeg"}] if audio else []
+        ),
+    }
+    return {
+        "subject_id": int(row["id"]),
+        "object_type": row.get("object_type"),
+        "characters": row.get("characters"),
+        "slug": row.get("slug"),
+        "primary_meaning": primary,
+        "meanings_raw": meaning_objs,
+        "readings_raw": row.get("readings") or [],
+        "raw": raw,
+        "level": row.get("level"),
+    }
+
+
 def related_stub(row):
     subject_id, object_type, characters, slug, meaning, level = row
     return {
@@ -170,7 +213,7 @@ def build_inspect_card(
 def _lookup_related(db, ids):
     if not ids:
         return []
-    rows = db.execute(
+    rows = list(db.execute(
         """
         select id, object_type, characters, slug, primary_meaning, level
         from wk_subjects
@@ -178,8 +221,91 @@ def _lookup_related(db, ids):
         """,
         [ids],
         fetch=True,
-    )
+    ) or [])
+    found = {row[0] for row in rows}
+    missing = [item for item in ids if item not in found]
+    if missing and db.has_relation("public.wk_catalog"):
+        rows.extend(db.execute(
+            """
+            select id, object_type, characters, slug, primary_meaning, level
+            from wk_catalog
+            where id = any(%s)
+            """,
+            [missing],
+            fetch=True,
+        ) or [])
     return [related_stub(row) for row in rows]
+
+
+def _card_from_catalog_row(db, row):
+    (sid, object_type, characters, slug, meaning, meanings, readings,
+     parts, sentences, components, amalgams, similar, audio, level, stage) = row
+    inputs = catalog_card_inputs({
+        "id": sid,
+        "object_type": object_type,
+        "characters": characters,
+        "slug": slug,
+        "primary_meaning": meaning,
+        "meanings": _parse_json(meanings) if not isinstance(meanings, list) else meanings,
+        "readings": _parse_json(readings) if not isinstance(readings, list) else readings,
+        "parts_of_speech": _parse_json(parts) if not isinstance(parts, list) else parts,
+        "context_sentences": _parse_json(sentences) if not isinstance(sentences, list) else sentences,
+        "component_ids": components or [],
+        "amalgamation_ids": amalgams or [],
+        "similar_ids": similar or [],
+        "audio_url": audio,
+        "level": level,
+    })
+    raw = inputs["raw"]
+    ids = (
+        raw["component_subject_ids"]
+        + raw["visually_similar_subject_ids"]
+        + raw["amalgamation_subject_ids"]
+    )
+    return build_inspect_card(
+        inputs["subject_id"], inputs["object_type"], inputs["characters"], inputs["slug"],
+        inputs["primary_meaning"], inputs["meanings_raw"], inputs["readings_raw"],
+        raw, level=inputs["level"], srs_stage=stage, related=_lookup_related(db, ids),
+    )
+
+
+def sentence_sightings(db, subject_id):
+    """How often this subject shows up in the sentence index, plus two examples."""
+    try:
+        if not db.has_relation("public.reading_sentences"):
+            return None
+    except Exception:
+        return None
+    subject_id = int(subject_id)
+    counted = db.execute(
+        """
+        select count(*) from reading_sentences
+        where word_ids @> ARRAY[%s]::bigint[]
+           or kanji_ids @> ARRAY[%s]::bigint[]
+        """,
+        [subject_id, subject_id],
+        fetch=True,
+    )
+    rows = db.execute(
+        """
+        select ja, en from reading_sentences
+        where word_ids @> ARRAY[%s]::bigint[]
+           or kanji_ids @> ARRAY[%s]::bigint[]
+        order by level, source_id, idx
+        limit 2
+        """,
+        [subject_id, subject_id],
+        fetch=True,
+    )
+    return {
+        "count": int(counted[0][0] if counted else 0),
+        "examples": [{"ja": ja, "en": en or ""} for ja, en in rows],
+    }
+
+
+def _with_sightings(db, card):
+    card["sightings"] = sentence_sightings(db, card["subject_id"])
+    return card
 
 
 def fetch_inspect(db, subject_id):
@@ -194,18 +320,33 @@ def fetch_inspect(db, subject_id):
         [subject_id],
         fetch=True,
     )
-    if not rows:
-        raise ValueError("subject not found")
-    (sid, object_type, characters, slug, meaning, meanings_raw, readings_raw,
-     raw, level, srs_stage) = rows[0]
-    parsed = _parse_json(raw)
-    ids = (
-        _ids(parsed, "component_subject_ids")
-        + _ids(parsed, "visually_similar_subject_ids")
-        + _ids(parsed, "amalgamation_subject_ids")
-    )
-    related = _lookup_related(db, ids)
-    return build_inspect_card(
-        sid, object_type, characters, slug, meaning, meanings_raw, readings_raw,
-        parsed, level=level, srs_stage=srs_stage, related=related,
-    )
+    if rows:
+        (sid, object_type, characters, slug, meaning, meanings_raw, readings_raw,
+         raw, level, srs_stage) = rows[0]
+        parsed = _parse_json(raw)
+        ids = (
+            _ids(parsed, "component_subject_ids")
+            + _ids(parsed, "visually_similar_subject_ids")
+            + _ids(parsed, "amalgamation_subject_ids")
+        )
+        return _with_sightings(db, build_inspect_card(
+            sid, object_type, characters, slug, meaning, meanings_raw, readings_raw,
+            parsed, level=level, srs_stage=srs_stage, related=_lookup_related(db, ids),
+        ))
+    if db.has_relation("public.wk_catalog"):
+        catalog = db.execute(
+            """
+            select c.id, c.object_type, c.characters, c.slug, c.primary_meaning,
+                   c.meanings, c.readings, c.parts_of_speech, c.context_sentences,
+                   c.component_ids, c.amalgamation_ids, c.similar_ids, c.audio_url,
+                   c.level, a.srs_stage
+            from wk_catalog c
+            left join wk_assignments a on a.subject_id = c.id
+            where c.id = %s
+            """,
+            [subject_id],
+            fetch=True,
+        )
+        if catalog:
+            return _with_sightings(db, _card_from_catalog_row(db, catalog[0]))
+    raise ValueError("subject not found")
