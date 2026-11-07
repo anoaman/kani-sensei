@@ -1948,15 +1948,15 @@ def _items_by_ids_rows(rows):
     ]
 
 
-def _translation_pool(db, level, passage_id):
-    if level is None:
+def _translation_pool(db, level, passage_id, kind="level"):
+    if level is None or kind not in ("level", "story"):
         return []
     rows = db.execute(
         """
         select sentences from reading_passages
-        where kind = 'level' and level = %s and id <> %s
+        where kind = %s and level = %s and id <> %s
         """,
-        [level, passage_id],
+        [kind, level, passage_id],
         fetch=True,
     )
     texts = []
@@ -1994,7 +1994,13 @@ def render_passage(db, passage_id, mark_opened=True):
     passage_id, kind, level, day, idx, title, sentences_raw, covers_raw, _version = row
     sentences = _json(sentences_raw, [])
     covers = [int(item) for item in (covers_raw or [])]
-    reference = int(level) if kind == "level" and level else user_level(db)
+    if kind == "story" and level:
+        from shared.stories import band_range
+        reference = band_range(int(level))[1]
+    elif kind == "level" and level:
+        reference = int(level)
+    else:
+        reference = user_level(db)
     lexicon = load_lexicon(db)
     # One pass to learn which subjects are on the page, then again with stages.
     preview = _annotate_saved(sentences, lexicon, {}, reference, covers)
@@ -2015,30 +2021,34 @@ def render_passage(db, passage_id, mark_opened=True):
         sentences,
         focus,
         _distractor_pool(db, pool_level),
-        _translation_pool(db, level if kind == "level" else None, passage_id),
+        _translation_pool(db, level if kind in ("level", "story") else None, passage_id, kind=kind),
         with_translation=kind != "custom",
     )
     if mark_opened:
         _mark_opened(db, passage_id)
     progress = _progress_payload(_progress_tuple(db, passage_id))
     siblings = []
-    if kind == "level" and level:
+    if kind in ("level", "story") and level:
         siblings = db.execute(
             """
             select id, idx from reading_passages
-            where kind = 'level' and level = %s
+            where kind = %s and level = %s
             order by idx
             """,
-            [level],
+            [kind, level],
             fetch=True,
         )
     next_id = None
+    prev_id = None
     total = len(siblings) or (1 if idx else 0)
     if siblings and idx:
         for sib_id, sib_idx in siblings:
-            if sib_idx and int(sib_idx) == int(idx) + 1:
+            if not sib_idx:
+                continue
+            if int(sib_idx) == int(idx) + 1:
                 next_id = sib_id
-                break
+            elif int(sib_idx) == int(idx) - 1:
+                prev_id = sib_id
     coverage = level_coverage(db, int(level)) if kind == "level" and level else None
     return {
         "id": passage_id,
@@ -2049,6 +2059,7 @@ def render_passage(db, passage_id, mark_opened=True):
         "of": total or None,
         "title": title,
         "next_id": next_id,
+        "prev_id": prev_id,
         "coverage": coverage,
         "sentences": rendered,
         "questions": questions,
@@ -2156,11 +2167,14 @@ def fetch_index(db):
             "coverage": (covered / total) if total else 0,
             "preview": level > reached,
         })
+    from shared.stories import story_summaries
+
     return {
         "catalog_ready": True,
         "user_level": reached,
         "levels": levels,
         "daily": daily_summary(db),
+        "stories": story_summaries(db),
     }
 
 
