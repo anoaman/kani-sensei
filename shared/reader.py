@@ -2102,7 +2102,7 @@ def _items_by_ids_rows(rows):
 
 
 def _translation_pool(db, level, passage_id, kind="level"):
-    if level is None or kind not in ("level", "story"):
+    if level is None or kind not in ("level", "story", "words"):
         return []
     rows = db.execute(
         """
@@ -2150,7 +2150,7 @@ def render_passage(db, passage_id, mark_opened=True):
     if kind == "story" and level:
         from shared.stories import band_range
         reference = band_range(int(level))[1]
-    elif kind == "level" and level:
+    elif kind in ("level", "words") and level:
         reference = int(level)
     else:
         reference = user_level(db)
@@ -2174,14 +2174,14 @@ def render_passage(db, passage_id, mark_opened=True):
         sentences,
         focus,
         _distractor_pool(db, pool_level),
-        _translation_pool(db, level if kind in ("level", "story") else None, passage_id, kind=kind),
+        _translation_pool(db, level if kind in ("level", "story", "words") else None, passage_id, kind=kind),
         with_translation=kind != "custom",
     )
     if mark_opened:
         _mark_opened(db, passage_id)
     progress = _progress_payload(_progress_tuple(db, passage_id))
     siblings = []
-    if kind in ("level", "story") and level:
+    if kind in ("level", "story", "words") and level:
         siblings = db.execute(
             """
             select id, idx from reading_passages

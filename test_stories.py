@@ -4,10 +4,12 @@ from shared.reader import build_lexicon
 from shared.stories import (
     MAX_PAGES,
     PAGE_SENTENCES,
+    WORDS_PAGE_SIZE,
     band_of,
     band_range,
     iter_authored,
     needs_rebuild,
+    pages_for_words,
     story_is_stale,
     sentence_trail,
     story_violations,
@@ -157,6 +159,59 @@ class AuthoredFileTests(unittest.TestCase):
                 for sentence in sentences:
                     self.assertTrue(sentence["ja"].strip())
                     self.assertTrue(sentence["en"].strip())
+
+
+def word(subject_id, characters, sentences, meaning="meaning"):
+    return {
+        "id": subject_id,
+        "characters": characters,
+        "meaning": meaning,
+        "context_sentences": sentences,
+    }
+
+
+class WordPassageTests(unittest.TestCase):
+    def test_every_word_is_covered_and_a_high_kanji_falls_back(self):
+        items = [
+            word(item, "日", [{"ja": f"日が{item}。", "en": f"Sun {item}."}], meaning=f"sun {item}")
+            for item in range(1, 8)
+        ]
+        items.append(word(8, "日", [{"ja": "語です。", "en": "It is language."}], meaning="sun"))
+        pages = pages_for_words(items, lexicon(), 1)
+        self.assertEqual(len(pages), 2)
+        self.assertEqual(len(pages[0]["sentences"]), WORDS_PAGE_SIZE)
+        self.assertEqual(len(pages[1]["sentences"]), 2)
+        covered = set()
+        for page in pages:
+            covered |= set(page["covers"])
+        self.assertEqual(covered, set(range(1, 9)))
+        fallback = pages[1]["sentences"][-1]
+        self.assertEqual(fallback["ja"], "日があります。")
+        self.assertEqual(fallback["en"], "sun")
+        self.assertIsNone(fallback["source_id"])
+
+    def test_a_sentence_inside_the_level_is_kept_with_its_english(self):
+        item = word(4, "日", [
+            {"ja": "語です。", "en": "It is language."},
+            {"ja": "日はいい。", "en": "The day is good."},
+        ])
+        pages = pages_for_words([item], lexicon(), 1)
+        sentence = pages[0]["sentences"][0]
+        self.assertEqual(sentence["ja"], "日はいい。")
+        self.assertEqual(sentence["en"], "The day is good.")
+        self.assertEqual(sentence["source_id"], 4)
+        self.assertEqual(pages[0]["covers"], {4})
+
+    def test_word_pages_are_not_capped_at_the_band_limit(self):
+        items = [
+            word(item, "日", [{"ja": f"日が{item}。", "en": "day"}], meaning="sun")
+            for item in range(1, 32)
+        ]
+        pages = pages_for_words(items, lexicon(), 1)
+        total = sum(len(page["sentences"]) for page in pages)
+        self.assertEqual(total, 31)
+        self.assertGreater(total, MAX_PAGES * PAGE_SENTENCES)
+        self.assertEqual(len(pages), 6)
 
 
 class RebuildTests(unittest.TestCase):

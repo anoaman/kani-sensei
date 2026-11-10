@@ -8,6 +8,7 @@ import Home from "./Home.jsx";
 import ReadIndex from "./ReadIndex.jsx";
 import ReadLevel from "./ReadLevel.jsx";
 import ReadStory from "./ReadStory.jsx";
+import ReadWords from "./ReadWords.jsx";
 import Reader from "./Reader.jsx";
 import KanjiWeb from "./KanjiWeb.jsx";
 import ReadFeed from "./ReadFeed.jsx";
@@ -53,6 +54,7 @@ function viewFromPath(pathname) {
   if (pathname.startsWith("/read/today")) return "read-today";
   if (pathname.startsWith("/read/feed")) return "read-feed";
   if (pathname.startsWith("/read/story/")) return "read-story";
+  if (/^\/read\/level\/\d+\/words\/?$/.test(pathname)) return "read-words";
   if (pathname.startsWith("/read/level/")) return "read-level";
   if (pathname.startsWith("/read/p/")) return "read-passage";
   if (pathname === "/read" || pathname.startsWith("/read/")) return "read";
@@ -69,6 +71,11 @@ function readLevelFromPath(pathname) {
 
 function storyBandFromPath(pathname) {
   const match = pathname.match(/^\/read\/story\/(\d+)/);
+  return match ? Math.max(1, Math.min(60, Number(match[1]))) : 1;
+}
+
+function wordsLevelFromPath(pathname) {
+  const match = pathname.match(/^\/read\/level\/(\d+)\/words/);
   return match ? Math.max(1, Math.min(60, Number(match[1]))) : 1;
 }
 
@@ -276,6 +283,7 @@ export default function App() {
       {view === "read-feed" ? <ReadFeed go={navigate} /> : null}
       {view === "read-level" ? <ReadLevel key={pathname} level={readLevelFromPath(pathname)} go={navigate} /> : null}
       {view === "read-story" ? <ReadStory key={pathname} band={storyBandFromPath(pathname)} go={navigate} /> : null}
+      {view === "read-words" ? <ReadWords key={pathname} level={wordsLevelFromPath(pathname)} go={navigate} /> : null}
       {view === "web" ? <KanjiWeb key={pathname} level={webLevelFromPath(pathname)} go={navigate} /> : null}
       {view === "read-passage" || view === "read-today" ? (
         <Reader key={pathname} daily={view === "read-today"} passageId={passageIdFromPath(pathname)} go={navigate} />

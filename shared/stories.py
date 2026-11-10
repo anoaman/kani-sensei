@@ -1,4 +1,4 @@
-"""Level-band stories.
+"""Level-band stories, and one passage of every word on a single level.
 
 A band is three WaniKani levels: 1–3, 4–6, up to 58–60. Written pages live in
 shared/stories/band-NN.json. Every band also gets pages assembled from
@@ -8,6 +8,9 @@ Pages are ordinary reading_passages rows (kind = 'story'). The level column
 stores the band start. plan_version stores the story file's version, or 0
 when the band has no file. A version change rebuilds the pages and leaves
 reading_progress rows where they are, keyed by page id.
+
+A level's vocabulary is a different passage (kind = 'words'). It holds every
+vocabulary item on that level, in lesson order, and does not use the band cap.
 """
 
 from __future__ import annotations
@@ -33,6 +36,10 @@ MAX_SENTENCES = PAGE_SENTENCES * MAX_PAGES
 SENTENCE_VERSION = 0
 STORY_KIND = "story"
 EXTRA_PAGE_TITLE = "More from this band"
+WORDS_KIND = "words"
+WORDS_PAGE_SIZE = 6
+WORDS_VERSION = 1
+WORDS_PAGE_TITLE = "In lesson order"
 
 _STORIES_DIR = Path(__file__).resolve().parent / "stories"
 
@@ -463,7 +470,7 @@ def known_by_page(db, pages):
     return known_ratio(flat, stages), [known_ratio(ids, stages) for ids in per_page]
 
 
-def _page_rows(db, start):
+def _page_rows(db, start, kind=STORY_KIND):
     rows = db.execute(
         """
         select p.id, p.idx, p.title, p.sentences, p.covers,
@@ -473,7 +480,7 @@ def _page_rows(db, start):
         where p.kind = %s and p.level = %s
         order by p.idx
         """,
-        [STORY_KIND, start],
+        [kind, start],
         fetch=True,
     )
     pages = []
@@ -521,6 +528,180 @@ def story_view(db, start):
 def fetch_story(db, level):
     start = build_story(db, level)
     return story_view(db, start)
+
+
+def sentence_within_level(text, lexicon, level):
+    """True when every kanji in text is known and at or below level."""
+    level = int(level)
+    for char in text or "":
+        if not is_kanji(char):
+            continue
+        entry = lexicon.kanji.get(char)
+        kanji_level = entry.get("level") if entry else None
+        if kanji_level is None or int(kanji_level) > level:
+            return False
+    return True
+
+
+def pick_word_sentence(item, lexicon, level):
+    """First context sentence that stays inside the level, else a fixed frame.
+
+    The frame still contains the word. Its English line is the primary meaning.
+    """
+    characters = (item.get("characters") or "").strip()
+    meaning = (item.get("meaning") or item.get("primary_meaning") or "").strip()
+    for sentence in item.get("context_sentences") or []:
+        if not isinstance(sentence, dict):
+            continue
+        ja = (sentence.get("ja") or "").strip()
+        if not ja or not sentence_within_level(ja, lexicon, level):
+            continue
+        return {
+            "ja": ja,
+            "en": (sentence.get("en") or "").strip(),
+            "source_id": int(item["id"]),
+        }
+    return {
+        "ja": f"{characters}があります。",
+        "en": meaning,
+        "source_id": None,
+    }
+
+
+def pages_for_words(items, lexicon, level, page_size=WORDS_PAGE_SIZE):
+    """One sentence per vocabulary item, then pages of page_size. No page cap."""
+    chosen = []
+    for item in items or []:
+        if item.get("id") is None or not (item.get("characters") or "").strip():
+            continue
+        sentence = pick_word_sentence(item, lexicon, level)
+        chosen.append({**sentence, "covers": {int(item["id"])}})
+    page_size = max(1, int(page_size))
+    pages = []
+    for start in range(0, len(chosen), page_size):
+        chunk = chosen[start:start + page_size]
+        covers = set()
+        for sentence in chunk:
+            covers |= set(sentence["covers"])
+        pages.append({
+            "title": WORDS_PAGE_TITLE,
+            "sentences": [
+                {
+                    "ja": sentence["ja"],
+                    "en": sentence["en"],
+                    "source_id": sentence.get("source_id"),
+                }
+                for sentence in chunk
+            ],
+            "covers": covers,
+        })
+    return pages
+
+
+def _level_words(db, level):
+    rows = db.execute(
+        """
+        select id, characters, primary_meaning, context_sentences
+        from wk_catalog
+        where level = %s
+          and object_type in ('vocabulary', 'kana_vocabulary')
+          and characters is not null and characters <> ''
+        order by lesson_position nulls last, id
+        """,
+        [int(level)],
+        fetch=True,
+    )
+    words = []
+    for subject_id, characters, meaning, sentences in rows:
+        words.append({
+            "id": int(subject_id),
+            "characters": characters,
+            "meaning": meaning or "",
+            "context_sentences": _json(sentences, []),
+        })
+    return words
+
+
+def _words_stale(versions, expected_pages):
+    if not versions and int(expected_pages) == 0:
+        return False
+    if len(versions) != int(expected_pages):
+        return True
+    return needs_rebuild(versions, WORDS_VERSION)
+
+
+def build_words(db, level):
+    """Freeze every vocabulary item on this level. Rebuild when the rule version changes.
+
+    Progress stays on reading_progress, keyed by words:{level}:{n}.
+    """
+    require_index(db)
+    ensure_schema(db)
+    level = int(level)
+    if level < 1 or level > 60:
+        raise ValueError("level must be between 1 and 60")
+    items = _level_words(db, level)
+    pages = pages_for_words(items, load_lexicon(db), level)
+    existing = db.execute(
+        """
+        select plan_version from reading_passages
+        where kind = %s and level = %s
+        order by idx
+        """,
+        [WORDS_KIND, level],
+        fetch=True,
+    )
+    if not _words_stale([row[0] for row in existing], len(pages)):
+        return level
+
+    with db.reuse():
+        db.execute(
+            "delete from reading_passages where kind = %s and level = %s",
+            [WORDS_KIND, level],
+        )
+        for index, page in enumerate(pages, start=1):
+            _insert_passage(
+                db,
+                f"words:{level}:{index}",
+                WORDS_KIND,
+                level,
+                None,
+                index,
+                page["title"],
+                page["sentences"],
+                sorted(page["covers"]),
+                plan_version=WORDS_VERSION,
+            )
+    return level
+
+
+def words_view(db, level):
+    level = int(level)
+    pages = _page_rows(db, level, WORDS_KIND)
+    overall, ratios = known_by_page(db, pages) if pages else (None, [])
+    listed = []
+    for page, known in zip(pages, ratios):
+        listed.append({
+            "id": page["id"],
+            "idx": page["idx"],
+            "title": page["title"],
+            "sentences": len(page["sentences"]),
+            "opened": page["opened"],
+            "finished": page["finished"],
+            "known": known,
+        })
+    return {
+        "level": level,
+        "title": "All the words",
+        "pages": listed,
+        "finished": sum(1 for page in listed if page["finished"]),
+        "known": overall,
+    }
+
+
+def fetch_words(db, level):
+    level = build_words(db, level)
+    return words_view(db, level)
 
 
 def story_summaries(db):

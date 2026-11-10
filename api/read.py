@@ -8,6 +8,7 @@ GET  /api/read?action=web&level=N      Kanji Web for one level
 GET  /api/read?action=feed&offset=N    one just-right sentence
 GET  /api/read?action=search&q=        look up the catalog by kanji, kana, romaji, or meaning
 GET  /api/read?action=story&band=N     pages of one level band (1–3, 4–6, …)
+GET  /api/read?action=words&level=N    every vocabulary item on one level
 POST /api/read?action=lookup           {passage_id, subject_id}
 POST /api/read?action=feed             {subject_id}  Again on the feed
 POST /api/read?action=dictation        {passage_id, index, text}
@@ -40,7 +41,7 @@ from shared.reader import (
     save_custom,
     search_catalog,
 )
-from shared.stories import fetch_story
+from shared.stories import fetch_story, fetch_words
 
 
 def _level(value):
@@ -85,6 +86,8 @@ class handler(BaseHTTPRequestHandler):
                     body = search_catalog(db, query.get("q", [""])[0])
                 elif action == "story":
                     body = fetch_story(db, _level(query.get("band", [None])[0]))
+                elif action == "words":
+                    body = fetch_words(db, _level(query.get("level", [None])[0]))
                 else:
                     raise ValueError("unknown action")
             respond(self, 200, body)
