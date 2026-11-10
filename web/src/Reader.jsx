@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { toHiragana, toKana } from "wanakana";
+import { toKana } from "wanakana";
+import { readingVerdict } from "./answers.js";
 import { api } from "./api.js";
 import { InspectDrawer } from "./InspectCard.jsx";
 import { CatalogNote } from "./ReadIndex.jsx";
@@ -41,12 +42,6 @@ function showRuby(token, mode) {
   if (mode === "off") return false;
   if (mode === "all") return true;
   return token.status && token.status !== "known";
-}
-
-function readingMatches(text, accepted) {
-  const got = toHiragana(toKana((text || "").trim().toLowerCase()));
-  if (!got) return false;
-  return (accepted || []).some((item) => toHiragana(item) === got);
 }
 
 function RubyToken({ token, furigana, open, onPick }) {
@@ -281,6 +276,8 @@ function RecallRound({ data, furigana, onMiss, onScore }) {
   const [typed, setTyped] = useState("");
   const [verdict, setVerdict] = useState(null);
   const [correct, setCorrect] = useState(0);
+  const [nudged, setNudged] = useState(false);
+  const [hint, setHint] = useState("");
   const slot = slots[index];
 
   if (!slots.length) {
@@ -306,8 +303,15 @@ function RecallRound({ data, furigana, onMiss, onScore }) {
   function grade(event) {
     event.preventDefault();
     if (verdict) return;
-    const ok = readingMatches(typed, slot.accepted);
+    const result = readingVerdict(typed, slot.accepted);
+    if (result === "close" && !nudged) {
+      setNudged(true);
+      setHint("Close. Check the kana.");
+      return;
+    }
+    const ok = result === "pass";
     const nextCorrect = correct + (ok ? 1 : 0);
+    setHint("");
     setVerdict(ok ? "pass" : "miss");
     setCorrect(nextCorrect);
     if (!ok) onMiss(slot.token.subject_id);
@@ -318,6 +322,8 @@ function RecallRound({ data, furigana, onMiss, onScore }) {
     setIndex((current) => current + 1);
     setTyped("");
     setVerdict(null);
+    setNudged(false);
+    setHint("");
   }
 
   return (
@@ -363,7 +369,10 @@ function RecallRound({ data, furigana, onMiss, onScore }) {
           <input
             lang="ja"
             value={typed}
-            onChange={(event) => setTyped(toKana(event.target.value.toLowerCase()))}
+            onChange={(event) => {
+              setTyped(toKana(event.target.value.toLowerCase()));
+              if (hint) setHint("");
+            }}
             placeholder="Reading"
             aria-label="Reading of the blank"
             autoCapitalize="off"
@@ -372,6 +381,7 @@ function RecallRound({ data, furigana, onMiss, onScore }) {
           <button className="go-btn" type="submit">Check</button>
         </form>
       )}
+      {hint && !verdict ? <p className="drill-hint">{hint}</p> : null}
     </div>
   );
 }
@@ -382,6 +392,8 @@ function Check({ questions, onFinish }) {
   const [typed, setTyped] = useState("");
   const [verdict, setVerdict] = useState(null);
   const [score, setScore] = useState(0);
+  const [nudged, setNudged] = useState(false);
+  const [hint, setHint] = useState("");
   const question = questions[index];
 
   if (!questions.length) {
@@ -408,7 +420,14 @@ function Check({ questions, onFinish }) {
   function gradeReading(event) {
     event.preventDefault();
     if (verdict) return;
-    const ok = readingMatches(typed, question.accepted);
+    const result = readingVerdict(typed, question.accepted);
+    if (result === "close" && !nudged) {
+      setNudged(true);
+      setHint("Close. Check the kana.");
+      return;
+    }
+    const ok = result === "pass";
+    setHint("");
     setVerdict(ok ? "pass" : "miss");
     if (ok) setScore((current) => current + 1);
   }
@@ -418,6 +437,8 @@ function Check({ questions, onFinish }) {
     setChoice(null);
     setTyped("");
     setVerdict(null);
+    setNudged(false);
+    setHint("");
   }
 
   return (
@@ -455,7 +476,10 @@ function Check({ questions, onFinish }) {
           <input
             lang="ja"
             value={typed}
-            onChange={(event) => setTyped(toKana(event.target.value.toLowerCase()))}
+            onChange={(event) => {
+              setTyped(toKana(event.target.value.toLowerCase()));
+              if (hint) setHint("");
+            }}
             placeholder="Reading"
             aria-label="Reading"
             autoCapitalize="off"
@@ -465,6 +489,7 @@ function Check({ questions, onFinish }) {
           {verdict ? null : <button className="go-btn" type="submit">Check</button>}
         </form>
       )}
+      {hint && !verdict ? <p className="drill-hint">{hint}</p> : null}
       {verdict ? (
         <div className="read-verdict">
           <p>{verdict === "pass" ? "Yes." : "Not quite."}</p>

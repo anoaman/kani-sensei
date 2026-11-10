@@ -23,7 +23,7 @@ import json
 import math
 from datetime import datetime, timedelta, timezone
 
-from shared.answers import grade_answer, normalize_reading
+from shared.answers import close_hint, grade_answer, normalize_meaning, normalize_reading
 from shared.inspect import SRS_NAMES, fetch_inspect, labeled_readings
 from shared.quiz import _accepted_meanings, _accepted_readings, _parse_json
 
@@ -491,12 +491,20 @@ def queue_item(db, row, now=None):
     return item
 
 
-def _whitelist(raw):
+def _aux_meanings(raw, kind):
     return [
         entry.get("meaning")
-        for entry in raw.get("auxiliary_meanings") or []
-        if isinstance(entry, dict) and entry.get("type") == "whitelist" and entry.get("meaning")
+        for entry in (raw or {}).get("auxiliary_meanings") or []
+        if isinstance(entry, dict) and entry.get("type") == kind and entry.get("meaning")
     ]
+
+
+def _whitelist(raw):
+    return _aux_meanings(raw, "whitelist")
+
+
+def _blacklist(raw):
+    return _aux_meanings(raw, "blacklist")
 
 
 def _reading_hint(readings_raw, submitted):
@@ -517,9 +525,9 @@ def _other(kind):
     return {"on'yomi": "kun'yomi", "kun'yomi": "on'yomi"}.get(kind, "taught reading")
 
 
-def answer(db, subject_id, prompt_type, text=None, gave_up=False):
+def answer(db, subject_id, prompt_type, text=None, gave_up=False, second_look=False):
     """Grade one half of an item in whatever mode it is in right now."""
-    from shared.drill import wrong_type_hint
+    from shared.drill import meaning_taken, wrong_type_hint
 
     ensure_schema(db)
     if prompt_type not in ("meaning", "reading"):
@@ -563,13 +571,26 @@ def answer(db, subject_id, prompt_type, text=None, gave_up=False):
             if prompt_type == "meaning"
             else readings
         )
-        result = grade_answer(prompt_type, submitted, accepted)
+        taken = None
+        if prompt_type == "meaning":
+            blocked = {normalize_meaning(item) for item in _blacklist(raw)}
+            taken = lambda got: got in blocked or meaning_taken(db, subject_id, got)
+        result = grade_answer(prompt_type, submitted, accepted, taken=taken)
         if result != "correct":
             hint = wrong_type_hint(db, subject_id, prompt_type, submitted)
             if not hint and prompt_type == "reading":
                 hint = _reading_hint(readings_raw, submitted)
             if hint:
                 return {"subject_id": subject_id, "retry": True, "hint": hint}
+        if result == "close" and not second_look:
+            return {
+                "subject_id": subject_id,
+                "retry": True,
+                "close": True,
+                "hint": close_hint(prompt_type),
+            }
+        if result == "close":
+            result = "wrong"
 
     correct = result in ("correct", "almost")
     # A check is one look per half: a miss closes the half too. Everywhere

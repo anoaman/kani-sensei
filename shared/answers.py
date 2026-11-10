@@ -2,14 +2,14 @@
 
 Meanings are case-insensitive and ignore punctuation / leading "to"/"the".
 Readings accept hiragana, katakana, or romaji. Close meaning typos are
-graded "almost"; drills pass them like WaniKani does and flag the spelling.
+graded "almost" and pass, with the spelling flagged. One extra typo is
+"close": the question stays open for a single retype.
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
-from difflib import SequenceMatcher
 
 
 _PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
@@ -55,6 +55,11 @@ _ROMAJI = (
 )
 
 _SMALL_TSU_CONSONANTS = set("kstcghfjzdhbpmyr")
+_SMALL_TO_BIG = str.maketrans({
+    "ぁ": "あ", "ぃ": "い", "ぅ": "う", "ぇ": "え", "ぉ": "お",
+    "ゃ": "や", "ゅ": "ゆ", "ょ": "よ", "っ": "つ", "ゎ": "わ",
+})
+_RANK = {"correct": 3, "almost": 2, "close": 1, "wrong": 0}
 
 
 def katakana_to_hiragana(text):
@@ -134,28 +139,67 @@ def normalize_meaning(text):
     return value
 
 
-def _levenshtein(left, right, cap=2):
+def fold_kana(text):
+    """Drop dakuten marks and grow small kana, for a near-miss reading check."""
+    nfd = unicodedata.normalize("NFD", text or "")
+    stripped = "".join(char for char in nfd if unicodedata.category(char) != "Mn")
+    return stripped.translate(_SMALL_TO_BIG)
+
+
+def meaning_tolerance(target):
+    """How many typos a meaning of this length may have and still pass."""
+    compact = (target or "").replace(" ", "")
+    if not compact or any(char.isdigit() for char in compact):
+        return 0
+    length = len(compact)
+    if length <= 3:
+        return 0
+    if length <= 5:
+        return 1
+    if length <= 7:
+        return 2
+    return 2 + (length // 7)
+
+
+def _damerau(left, right, cap):
+    """Adjacent-swap-aware edit distance, aborted past `cap`."""
+    if cap < 0:
+        return cap + 1
     if abs(len(left) - len(right)) > cap:
         return cap + 1
     if left == right:
         return 0
+    prev_prev = None
     prev = list(range(len(right) + 1))
     for i, lch in enumerate(left, 1):
         curr = [i]
         for j, rch in enumerate(right, 1):
-            curr.append(min(
-                prev[j] + 1,
-                curr[j - 1] + 1,
-                prev[j - 1] + (lch != rch),
-            ))
-        prev = curr
-        if min(prev) > cap:
+            cost = 0 if lch == rch else 1
+            value = min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+            if i > 1 and j > 1 and lch == right[j - 2] and left[i - 2] == rch:
+                value = min(value, prev_prev[j - 2] + 1)
+            curr.append(value)
+        if min(curr) > cap:
             return cap + 1
+        prev_prev, prev = prev, curr
     return prev[-1]
 
 
-def grade_meaning(submitted, accepted):
-    """Return 'correct', 'almost', or 'wrong'."""
+def _meaning_near(got, target):
+    compact = (target or "").replace(" ", "")
+    if any(char.isdigit() for char in compact):
+        return "wrong"
+    allowed = meaning_tolerance(target)
+    distance = _damerau(got, target, cap=allowed + 1)
+    if distance <= allowed:
+        return "almost"
+    if distance == allowed + 1:
+        return "close"
+    return "wrong"
+
+
+def grade_meaning(submitted, accepted, taken=None):
+    """Return 'correct', 'almost', 'close', or 'wrong'."""
     got = normalize_meaning(submitted)
     if not got:
         return "wrong"
@@ -163,13 +207,14 @@ def grade_meaning(submitted, accepted):
     targets = [item for item in targets if item]
     if got in targets:
         return "correct"
+    best = "wrong"
     for target in targets:
-        if len(target) >= 5 and _levenshtein(got, target, cap=1) == 1:
-            return "almost"
-        ratio = SequenceMatcher(None, got, target).ratio()
-        if len(target) >= 6 and ratio >= 0.88:
-            return "almost"
-    return "wrong"
+        verdict = _meaning_near(got, target)
+        if _RANK[verdict] > _RANK[best]:
+            best = verdict
+    if best in ("almost", "close") and taken and taken(got):
+        return "wrong"
+    return best
 
 
 def grade_reading(submitted, accepted):
@@ -177,12 +222,25 @@ def grade_reading(submitted, accepted):
     if not got:
         return "wrong"
     targets = [normalize_reading(item) for item in accepted if item]
+    targets = [item for item in targets if item]
     if got in targets:
         return "correct"
+    folded = fold_kana(got)
+    for target in targets:
+        if folded and fold_kana(target) == folded:
+            return "close"
+        if len(target) >= 3 and _damerau(got, target, cap=1) == 1:
+            return "close"
     return "wrong"
 
 
-def grade_answer(prompt_type, submitted, accepted):
+def grade_answer(prompt_type, submitted, accepted, taken=None):
     if prompt_type == "reading":
         return grade_reading(submitted, accepted)
-    return grade_meaning(submitted, accepted)
+    return grade_meaning(submitted, accepted, taken=taken)
+
+
+def close_hint(prompt_type):
+    if prompt_type == "reading":
+        return "Close. Check the kana."
+    return "Close. Check the spelling."

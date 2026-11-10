@@ -121,6 +121,7 @@ export default function CourseSession({ level, mode, daily = false, go, onFocus 
   const [today, setToday] = useState(null); // daily: { done, total, streak, completed }
   const composing = useRef(false);
   const inputRef = useRef(null);
+  const secondLook = useRef(false);
 
   const current = queue[0] || null;
   const item = current ? items[current.subject_id] : null;
@@ -135,6 +136,7 @@ export default function CourseSession({ level, mode, daily = false, go, onFocus 
   async function load() {
     setPhase("loading");
     setError("");
+    secondLook.current = false;
     setStats({ answered: 0, correct: 0, done: [], passed: false });
     setFeedback(null);
     setPasses({});
@@ -177,14 +179,23 @@ export default function CourseSession({ level, mode, daily = false, go, onFocus 
       const result = await api.courseAnswer({
         subject_id: current.subject_id,
         prompt_type: current.prompt_type,
-        ...(gaveUp ? { gave_up: true } : { text }),
+        ...(gaveUp ? { gave_up: true } : { text, second_look: secondLook.current }),
       });
       if (result.retry) {
         setHint(result.hint || "Try the other half.");
         bump();
-        inputRef.current?.select();
+        if (result.close) secondLook.current = true;
+        const el = inputRef.current;
+        if (result.close && el) {
+          const n = el.value.length;
+          el.focus();
+          el.setSelectionRange(n, n);
+        } else {
+          el?.select();
+        }
         return;
       }
+      secondLook.current = false;
       setHint("");
       // A missed check is the moment to see the card, so open it.
       setDetails(!result.correct && result.mode === "check");
@@ -212,6 +223,7 @@ export default function CourseSession({ level, mode, daily = false, go, onFocus 
   function next() {
     if (!feedback) return;
     const result = feedback;
+    secondLook.current = false;
     setFeedback(null);
     setTyped("");
     setDetails(false);

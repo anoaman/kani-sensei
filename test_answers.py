@@ -4,6 +4,7 @@ from shared.answers import (
     grade_meaning,
     grade_reading,
     katakana_to_hiragana,
+    meaning_tolerance,
     normalize_meaning,
     normalize_reading,
     romaji_to_hiragana,
@@ -27,6 +28,34 @@ class MeaningTests(unittest.TestCase):
 
     def test_empty_is_wrong(self):
         self.assertEqual(grade_meaning("  ", ["eat"]), "wrong")
+
+    def test_tolerance_grows_with_length(self):
+        self.assertEqual(meaning_tolerance("hi"), 0)
+        self.assertEqual(meaning_tolerance("big"), 0)
+        self.assertEqual(meaning_tolerance("fire"), 1)
+        self.assertEqual(meaning_tolerance("mount"), 1)
+        self.assertEqual(meaning_tolerance("banana"), 2)
+        self.assertEqual(meaning_tolerance("bananas"), 2)
+        self.assertEqual(meaning_tolerance("mountain"), 3)
+        self.assertEqual(meaning_tolerance("2011"), 0)
+        self.assertEqual(meaning_tolerance("twenty 1"), 0)
+
+    def test_swapped_letters_count_as_one_typo(self):
+        self.assertEqual(grade_meaning("fier", ["fire"]), "almost")
+        self.assertEqual(grade_meaning("rian", ["rain"]), "almost")
+        self.assertEqual(grade_meaning("thrid day", ["Third Day"]), "almost")
+
+    def test_one_past_the_allowance_is_close(self):
+        self.assertEqual(grade_meaning("bgi", ["big"]), "close")
+
+    def test_another_items_meaning_is_wrong(self):
+        taken = lambda got: got == "three"
+        self.assertEqual(grade_meaning("three", ["tree"], taken=taken), "wrong")
+        self.assertEqual(grade_meaning("three", ["tree"]), "almost")
+
+    def test_a_number_answer_must_match_exactly(self):
+        self.assertEqual(grade_meaning("2012", ["2011"]), "wrong")
+        self.assertEqual(grade_meaning("2011", ["2011"]), "correct")
 
 
 class ReadingTests(unittest.TestCase):
@@ -52,6 +81,15 @@ class ReadingTests(unittest.TestCase):
 
     def test_normalize_reading_strips_spaces(self):
         self.assertEqual(normalize_reading("た べ る"), "たべる")
+
+    def test_one_kana_off_is_close(self):
+        self.assertEqual(grade_reading("たべう", ["たべる"]), "close")
+        self.assertEqual(grade_reading("かわ", ["がわ"]), "close")
+        self.assertEqual(grade_reading("きつて", ["きって"]), "close")
+        self.assertEqual(grade_reading("きょ", ["きょう"]), "close")
+
+    def test_a_different_word_stays_wrong(self):
+        self.assertEqual(grade_reading("やま", ["かわ"]), "wrong")
 
 
 if __name__ == "__main__":

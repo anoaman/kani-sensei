@@ -180,6 +180,17 @@ class DictationTests(unittest.TestCase):
         self.assertEqual(missed["verdict"], "miss")
         self.assertTrue(any(op["op"] == "del" for op in missed["ops"]))
 
+    def test_particle_homophone_is_free(self):
+        graded = grade_dictation("けんは", "けんわ")
+        self.assertEqual(graded["verdict"], "pass")
+        self.assertEqual(graded["score"], 1.0)
+        self.assertTrue(all(op["op"] == "eq" for op in graded["ops"]))
+
+    def test_long_mark_is_a_real_edit(self):
+        graded = grade_dictation("のーと", "のと")
+        self.assertLess(graded["score"], 1.0)
+        self.assertTrue(any(op["op"] == "del" for op in graded["ops"]))
+
 
 class PlanTests(unittest.TestCase):
     def test_cover_is_complete_and_stable(self):

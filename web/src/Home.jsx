@@ -225,6 +225,14 @@ export function QuickQuiz({ kicker, meta, start, onFinished, onSeen, done, autoF
       const result = await api.answerDrill({ session_id: session.session_id, question_id: question.id, ...body });
       if (result.retry) {
         setHint(result.hint);
+        if (result.close) {
+          const el = inputRef.current;
+          if (el) {
+            const n = el.value.length;
+            el.focus();
+            el.setSelectionRange(n, n);
+          }
+        }
         return;
       }
       setHint("");

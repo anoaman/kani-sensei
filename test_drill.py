@@ -167,6 +167,8 @@ class FakeDrillDb:
 
     def execute(self, sql, params=None, fetch=False):
         sess = self.session
+        if "meaning_taken" in sql or "meaning_blacklist" in sql:
+            return []
         if "from wk_subjects" in sql:
             return [self.subject]
         if "max(position)" in sql:
@@ -198,9 +200,12 @@ class FakeDrillDb:
             self.questions[params[-1]]["answered"] = True
         elif "update drill_sessions" in sql:
             import json
-            (sess["score_correct"], sess["score_total"], sess["combo_best"],
-             meta, sess["question_count"]) = params[:5]
-            sess["meta"] = json.loads(meta)
+            if "score_correct" in sql:
+                (sess["score_correct"], sess["score_total"], sess["combo_best"],
+                 meta, sess["question_count"]) = params[:5]
+                sess["meta"] = json.loads(meta)
+            else:
+                sess["meta"] = json.loads(params[0])
         return None
 
 
@@ -250,6 +255,58 @@ class DrillGradeTests(unittest.TestCase):
         result = grade_drill(db, "s1", "q1", text="big")
         self.assertTrue(result["correct"])
 
+    def test_a_near_miss_shakes_and_stays_open(self):
+        from shared.drill import grade_drill
+        db = FakeDrillDb("meaning", ["Big"], count=1)
+        result = grade_drill(db, "s1", "q1", text="bgi")
+        self.assertTrue(result["retry"])
+        self.assertTrue(result["close"])
+        self.assertIn("spelling", result["hint"])
+        self.assertFalse(db.questions["q1"]["answered"])
+        self.assertEqual(db.session["score_total"], 0)
+        self.assertIn("q1", db.session["meta"]["nudged"])
+        again = grade_drill(db, "s1", "q1", text="big")
+        self.assertTrue(again["correct"])
+
+    def test_a_second_near_miss_counts(self):
+        from shared.drill import grade_drill
+        db = FakeDrillDb("meaning", ["Big"], count=1)
+        grade_drill(db, "s1", "q1", text="bgi")
+        result = grade_drill(db, "s1", "q1", text="bgi")
+        self.assertFalse(result.get("retry"))
+        self.assertFalse(result["correct"])
+        self.assertTrue(db.questions["q1"]["answered"])
+        self.assertEqual(result["score"]["total"], 1)
+
+
+class MeaningTakenTests(unittest.TestCase):
+    def test_another_items_meaning_is_taken(self):
+        from shared.drill import meaning_taken
+        db = TakenDb(others=[("Three", ["Three"])])
+        self.assertTrue(meaning_taken(db, 1, "three"))
+        self.assertFalse(meaning_taken(TakenDb(), 1, "three"))
+
+    def test_blacklist_is_taken(self):
+        from shared.drill import meaning_taken
+        db = TakenDb(raw={"auxiliary_meanings": [{"type": "blacklist", "meaning": "hour"}]})
+        self.assertTrue(meaning_taken(db, 1, "hour"))
+
+
+class TakenDb:
+    def __init__(self, others=None, raw=None):
+        self.others = others or []
+        self.raw = raw or {}
+
+    def has_relation(self, name):
+        return True
+
+    def execute(self, sql, args=None, fetch=False):
+        if "meaning_blacklist" in sql:
+            return [(self.raw,)]
+        if "meaning_taken" in sql:
+            return self.others
+        return []
+
 
 class DrillRequeueTests(unittest.TestCase):
     def test_miss_comes_back_and_gates_the_finish(self):
@@ -298,6 +355,16 @@ class DrillRequeueTests(unittest.TestCase):
 
 
 class GateRulesInDrillTests(unittest.TestCase):
+    def test_a_near_miss_does_not_use_an_allowed_miss(self):
+        from shared.drill import grade_drill
+        db = FakeDrillDb("meaning", ["Big"], count=5)
+        db.session["meta"] = {"allowed_misses": 1}
+        result = grade_drill(db, "s1", "q1", text="bgi")
+        self.assertTrue(result["retry"])
+        self.assertFalse(result.get("failed"))
+        self.assertEqual(db.session["score_total"], 0)
+        self.assertIsNone(result.get("requeued"))
+
     def test_capped_session_ends_once_it_cannot_pass(self):
         from shared.drill import grade_drill
         db = FakeDrillDb("meaning", ["Big"], count=5)

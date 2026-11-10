@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from shared.course import (
     GURU,
     RELEARN_FLOOR,
+    answer,
     level_summary,
     mode_for,
     next_available,
@@ -87,5 +88,62 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(stage_bucket(9), "burned")
 
 
+class FakeCourseDb:
+    def __init__(self, meaning="Big", readings=None, raw=None, stage=0):
+        self.meaning = meaning
+        self.readings = readings or [{"reading": "だい", "accepted_answer": True}]
+        self.raw = raw or {}
+        self.stage = stage
+        self.meaning_ok = False
+        self.reading_ok = False
+        self.meaning_wrong = 0
+        self.reading_wrong = 0
+        self.updates = []
+
+    def has_relation(self, name):
+        return True
+
+    def execute(self, sql, args=None, fetch=False):
+        if "meaning_taken" in sql:
+            return []
+        if "meaning_blacklist" in sql:
+            return [(self.raw,)]
+        if "from course_items" in sql and fetch:
+            return [(
+                1, self.stage, NOW,
+                self.meaning_ok, self.reading_ok, self.meaning_wrong, self.reading_wrong,
+                "kanji", self.meaning,
+                [{"meaning": self.meaning, "primary": True}],
+                self.readings,
+                self.raw,
+            )]
+        if "select meanings, readings from wk_subjects" in sql:
+            return [([{"meaning": self.meaning}], self.readings)]
+        if "update course_items" in sql:
+            self.updates.append(args)
+            if args and "srs_stage" not in sql:
+                self.meaning_ok, self.reading_ok, self.meaning_wrong, self.reading_wrong = args[:4]
+            return []
+        return []
+
+
+class AnswerTests(unittest.TestCase):
+    def test_a_near_miss_shakes(self):
+        db = FakeCourseDb()
+        result = answer(db, 1, "meaning", text="bgi")
+        self.assertTrue(result["retry"])
+        self.assertTrue(result["close"])
+        self.assertIn("spelling", result["hint"])
+        self.assertEqual(db.updates, [])
+
+    def test_second_look_counts_a_near_miss(self):
+        db = FakeCourseDb()
+        result = answer(db, 1, "meaning", text="bgi", second_look=True)
+        self.assertFalse(result.get("retry"))
+        self.assertFalse(result["correct"])
+        self.assertTrue(db.updates)
+
+
 if __name__ == "__main__":
     unittest.main()
+

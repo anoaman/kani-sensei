@@ -6,7 +6,7 @@ GET  /api/course?action=queue&level=N&mode=check|relearn|reviews|ahead
 GET  /api/course?action=daily[&summary=1] today's set: remaining items, progress, streak
 GET  /api/course?action=sky               every item as a dot, for the home map
 POST /api/course?action=start   {level}                     start/restart a level
-POST /api/course?action=answer  {subject_id, prompt_type, text | gave_up}
+POST /api/course?action=answer  {subject_id, prompt_type, text | gave_up, second_look}
 """
 
 from http.server import BaseHTTPRequestHandler
@@ -94,6 +94,7 @@ class handler(BaseHTTPRequestHandler):
                         body.get("prompt_type"),
                         text=body.get("text"),
                         gave_up=bool(body.get("gave_up")),
+                        second_look=bool(body.get("second_look")),
                     )
                 else:
                     raise ValueError("unknown action")

@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 
 from shared.answers import (
+    close_hint,
     grade_answer as check_typed,
     looks_like_kana,
     normalize_meaning,
@@ -599,6 +600,128 @@ TIMER_GRACE_SECONDS = 3
 _ALL_KANA_RE = re.compile(r"^[\u3040-\u30ffー]+$")
 
 
+def _meaning_values(primary, meanings):
+    values = []
+    if primary:
+        values.append(primary)
+    for entry in _parse_json(meanings):
+        if isinstance(entry, dict):
+            text = entry.get("meaning")
+        else:
+            text = entry
+        if text:
+            values.append(text)
+    return values
+
+
+def _rows_have_meaning(rows, got):
+    for primary, meanings in rows or []:
+        for text in _meaning_values(primary, meanings):
+            if normalize_meaning(text) == got:
+                return True
+    return False
+
+
+_TAKEN_SQL = """
+/* meaning_taken */
+select primary_meaning, meanings
+from {table}
+where id <> %s
+  and (
+    lower(coalesce(primary_meaning, '')) = any(%s)
+    or exists (
+      select 1
+      from jsonb_array_elements(coalesce(meanings, '[]'::jsonb)) el
+      where lower(
+        case
+          when jsonb_typeof(el) = 'string' then el #>> '{}'
+          else coalesce(el->>'meaning', '')
+        end
+      ) = any(%s)
+    )
+  )
+limit 12
+"""
+
+
+def _meaning_needles(got):
+    return [got, f"to {got}", f"the {got}", f"a {got}", f"an {got}"]
+
+
+def _blacklist_meanings(raw):
+    payload = raw if isinstance(raw, dict) else _parse_json(raw)
+    out = []
+    for entry in (payload or {}).get("auxiliary_meanings") or []:
+        if not isinstance(entry, dict) or entry.get("type") != "blacklist":
+            continue
+        text = entry.get("meaning")
+        if text:
+            out.append(text)
+    return out
+
+
+def meaning_taken(db, subject_id, submitted):
+    """True when this spelling is another item's meaning, or a blacklist entry."""
+    got = normalize_meaning(submitted)
+    if not got:
+        return False
+    try:
+        rows = db.execute(
+            "/* meaning_blacklist */ select raw from wk_subjects where id = %s",
+            [subject_id],
+            fetch=True,
+        )
+        raw = rows[0][0] if rows else {}
+        if any(normalize_meaning(item) == got for item in _blacklist_meanings(raw)):
+            return True
+    except Exception:
+        pass
+    needles = _meaning_needles(got)
+    tables = []
+    try:
+        if db.has_relation("public.wk_catalog"):
+            tables.append("wk_catalog")
+    except Exception:
+        pass
+    tables.append("wk_subjects")
+    seen = set()
+    for table in tables:
+        if table in seen:
+            continue
+        seen.add(table)
+        try:
+            rows = db.execute(
+                _TAKEN_SQL.replace("{table}", table),
+                [subject_id, needles, needles],
+                fetch=True,
+            )
+        except Exception:
+            continue
+        if _rows_have_meaning(rows, got):
+            return True
+    return False
+
+
+def _nudge_close(db, session_id, qid, meta, prompt_type):
+    """Record a free retype. None if this question already had one."""
+    nudged = [str(item) for item in (meta.get("nudged") or [])]
+    key = str(qid)
+    if key in nudged:
+        return None
+    nudged.append(key)
+    meta["nudged"] = nudged
+    db.execute(
+        "update drill_sessions set meta = %s::jsonb where id = %s::uuid",
+        [json.dumps(meta), session_id],
+    )
+    return {
+        "question_id": qid,
+        "retry": True,
+        "close": True,
+        "hint": close_hint(prompt_type),
+    }
+
+
 def _subject_answers(db, subject_id):
     rows = db.execute(
         "select meanings, readings from wk_subjects where id = %s",
@@ -761,11 +884,21 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
         submitted = (text or "").strip()
         if not submitted:
             raise ValueError("text is required")
-        result = check_typed(prompt_type, submitted, accepted)
+        taken = None
+        if prompt_type == "meaning":
+            taken = lambda got: meaning_taken(db, subject_id, got)
+        result = check_typed(prompt_type, submitted, accepted, taken=taken)
         if result != "correct":
             hint = wrong_type_hint(db, subject_id, prompt_type, submitted)
             if hint:
                 return {"question_id": question_id, "retry": True, "hint": hint}
+        if result == "close" and not timed_out:
+            nudged = _nudge_close(db, session_id, qid, meta, prompt_type)
+            if nudged:
+                return nudged
+            result = "wrong"
+        elif result == "close":
+            result = "wrong"
         # Small typos pass, as on WaniKani; the reveal still flags the spelling.
         is_correct = result in ("correct", "almost")
         almost = result == "almost"

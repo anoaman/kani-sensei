@@ -326,10 +326,16 @@ export default function TestView({
         text: trimmed,
       });
       if (result.retry) {
-        // Wrong half of the item (reading vs meaning): shake, don't count it.
         setHint(result.hint || "Try the other half.");
         bump();
-        inputRef.current?.select();
+        const el = inputRef.current;
+        if (result.close && el) {
+          const n = el.value.length;
+          el.focus();
+          el.setSelectionRange(n, n);
+        } else {
+          el?.select();
+        }
         return;
       }
       applyResult(result, question);

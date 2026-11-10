@@ -752,6 +752,57 @@ def annotate_sentence(text, lexicon, prefer=None, stages=None, reference_level=N
     }
 
 
+_FREE_SOUND = {
+    frozenset("はわ"),
+    frozenset("へえ"),
+    frozenset("をお"),
+    frozenset("ぢじ"),
+    frozenset("づず"),
+}
+_SMALL_KANA = {
+    "ぁ": "あ", "ぃ": "い", "ぅ": "う", "ぇ": "え", "ぉ": "お",
+    "ゃ": "や", "ゅ": "ゆ", "ょ": "よ", "っ": "つ", "ゎ": "わ",
+}
+_O_ROW = set("おこそとのほもよろごぞどぼぽ")
+_E_ROW = set("えけせてねへめれげぜでべぺ")
+
+
+def _same_sound(left, right):
+    return left == right or frozenset((left, right)) in _FREE_SOUND
+
+
+def _heard_sub_cost(expected_char, got_char, prev_expected):
+    if expected_char == got_char:
+        return 0.0
+    if frozenset((expected_char, got_char)) in _FREE_SOUND:
+        return 0.0
+    if _SMALL_KANA.get(expected_char, expected_char) == _SMALL_KANA.get(got_char, got_char):
+        return 0.5
+    pair = frozenset((expected_char, got_char))
+    if pair == frozenset("うお") and prev_expected in _O_ROW:
+        return 0.5
+    if pair == frozenset("いえ") and prev_expected in _E_ROW:
+        return 0.5
+    return 1.0
+
+
+def _heard_distance(expected, got):
+    if expected == got:
+        return 0.0
+    prev = [float(index) for index in range(len(got) + 1)]
+    for index, exp in enumerate(expected, 1):
+        curr = [float(index)]
+        prev_exp = expected[index - 2] if index >= 2 else ""
+        for column, got_char in enumerate(got, 1):
+            curr.append(min(
+                prev[column] + 1.0,
+                curr[column - 1] + 1.0,
+                prev[column - 1] + _heard_sub_cost(exp, got_char, prev_exp),
+            ))
+        prev = curr
+    return prev[-1]
+
+
 def levenshtein(left, right):
     if left == right:
         return 0
@@ -779,7 +830,7 @@ def diff_ops(expected, got):
     lengths = [[0] * (cols + 1) for _ in range(rows + 1)]
     for index in range(rows - 1, -1, -1):
         for column in range(cols - 1, -1, -1):
-            if expected[index] == got[column]:
+            if _same_sound(expected[index], got[column]):
                 lengths[index][column] = lengths[index + 1][column + 1] + 1
             else:
                 lengths[index][column] = max(lengths[index + 1][column], lengths[index][column + 1])
@@ -787,7 +838,7 @@ def diff_ops(expected, got):
     index = 0
     column = 0
     while index < rows and column < cols:
-        if expected[index] == got[column]:
+        if _same_sound(expected[index], got[column]):
             ops.append(("eq", expected[index]))
             index += 1
             column += 1
@@ -820,7 +871,7 @@ def grade_dictation(expected_kana, submitted):
     elif not expected:
         score = 0.0
     else:
-        score = max(0.0, 1 - levenshtein(expected, got) / len(expected))
+        score = max(0.0, 1 - _heard_distance(expected, got) / len(expected))
     score = round(score, 4)
     if score >= 0.85:
         verdict = "pass"
