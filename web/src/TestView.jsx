@@ -849,7 +849,13 @@ export default function TestView({
               {!feedback.correct && inspect ? (
                 <MissHint card={inspect} promptType={question?.prompt_type} />
               ) : null}
-              {inspect ? <InspectCard card={inspect} onOpenRelated={openRelated} /> : null}
+              {inspect ? (
+                <InspectCard
+                  card={inspect}
+                  onOpenRelated={openRelated}
+                  mnemonicOpen={!feedback.correct}
+                />
+              ) : null}
               <div className="reveal-actions">
                 <button className="primary-btn" onClick={next}>
                   {feedback.score?.finished ? "Finish" : "Next"}
