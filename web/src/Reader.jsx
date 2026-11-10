@@ -637,11 +637,16 @@ export default function Reader({ daily = false, passageId = "", go }) {
   }
 
   const story = data?.kind === "story";
-  const listHref = story && data?.level
-    ? `/read/story/${data.level}`
-    : data?.level
-      ? `/read/level/${data.level}`
-      : "/read";
+  const words = data?.kind === "words";
+  const paged = story || words;
+  const listHref = words && data?.level
+    ? `/read/level/${data.level}/words`
+    : story && data?.level
+      ? `/read/story/${data.level}`
+      : data?.level
+        ? `/read/level/${data.level}`
+        : "/read";
+  const backLabel = words ? "← All the words" : story ? "← Story" : "← Readings";
   const kicker = data?.kind === "daily"
     ? "Today's read"
     : data?.kind === "custom"
@@ -656,12 +661,12 @@ export default function Reader({ daily = false, passageId = "", go }) {
     <section className={`panel read size-${textSize}${vertical ? " is-vertical" : ""}`}>
       <div className="section-head level-head">
         <div>
-          <button type="button" className="quiet-link" onClick={() => go(listHref)}>{story ? "← Story" : "← Readings"}</button>
+          <button type="button" className="quiet-link" onClick={() => go(listHref)}>{backLabel}</button>
           <p className="kicker">{kicker}</p>
           <h2>
             {data?.title || "Reading"}
-            {story && data?.of ? <small> Page {data.idx} of {data.of}</small> : null}
-            {!story && data?.of ? <small> {data.idx} of {data.of}</small> : null}
+            {paged && data?.of ? <small> Page {data.idx} of {data.of}</small> : null}
+            {!paged && data?.of ? <small> {data.idx} of {data.of}</small> : null}
           </h2>
         </div>
         <div className="read-switches">
@@ -795,9 +800,9 @@ export default function Reader({ daily = false, passageId = "", go }) {
               <p className="kicker">{finished.already ? "Already finished" : "Done"}</p>
               <strong>{finished.already ? "You've read this one." : "Saved."}</strong>
               {data.next_id ? (
-                <button type="button" className="go-btn" onClick={() => go(`/read/p/${encodeURIComponent(data.next_id)}`)}>{story ? "Next page" : "Next reading"}</button>
+                <button type="button" className="go-btn" onClick={() => go(`/read/p/${encodeURIComponent(data.next_id)}`)}>{paged ? "Next page" : "Next reading"}</button>
               ) : (
-                <button type="button" className="go-btn" onClick={() => go(listHref)}>{story ? "Back to the story" : "Back to the list"}</button>
+                <button type="button" className="go-btn" onClick={() => go(listHref)}>{words ? "Back to the words" : story ? "Back to the story" : "Back to the list"}</button>
               )}
             </div>
           ) : checking ? (
