@@ -202,6 +202,15 @@ p { line-height: 1.6; }
 .meter-track { height: 4px; background: var(--paper-deep); }
 .meter-fill { height: 100%; background: var(--ver); transition: width .2s ease; }
 .meter-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+.meter-tools { display: flex; align-items: center; gap: 14px; }
+.session-tools { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; justify-content: flex-end; }
+.sound-toggle { font-size: 13px; }
+.setup-line { margin: 0 0 16px; font: 500 26px var(--serif); }
+.recap-links { display: flex; gap: 18px; margin-top: 16px; }
+.miss-hint { margin-top: 12px; }
+.notebook-strip { display: grid; gap: 12px; margin: 8px 0 36px; padding-top: 22px; border-top: 1px solid var(--line); }
+.notebook-head { display: flex; justify-content: space-between; align-items: end; gap: 16px; flex-wrap: wrap; }
+.notebook-head strong { font: 500 22px var(--serif); }
 .prompt { text-align: center; padding: 24px 0 32px; }
 .chars { font-family: var(--jp); font-size: clamp(64px, 12vw, 110px); font-weight: 700; line-height: 1.15; }
 .recall-form { display: grid; grid-template-columns: 1fr auto; gap: 10px; max-width: 560px; margin: 0 auto; }

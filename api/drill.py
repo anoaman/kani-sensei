@@ -2,6 +2,7 @@
 
 POST /api/drill                 start a session
 POST /api/drill?action=answer   grade one answer
+POST /api/drill?action=undo     take back one typed slip
 GET  /api/drill?session_id=     fetch session + miss recap
 GET  /api/drill?action=stats    practice overview stats
 
@@ -20,6 +21,7 @@ from shared.drill import (
     get_drill,
     grade_drill_answer,
     start_drill,
+    undo_miss,
 )
 from shared.http_util import respond
 from shared.neon import NeonClient
@@ -61,11 +63,16 @@ class handler(BaseHTTPRequestHandler):
             body = read_json_body(self)
             db = self._db()
             with db.reuse():
-                if action == "answer":
+                if action in ("answer", "undo"):
                     session_id = body.get("session_id")
                     question_id = body.get("question_id")
                     if session_id is None or question_id is None:
                         raise ValueError("session_id and question_id are required")
+                    if action == "undo":
+                        result = undo_miss(db, session_id, question_id)
+                        clear_cache()
+                        respond(self, 200, result)
+                        return
                     result = grade_drill_answer(
                         db,
                         session_id,

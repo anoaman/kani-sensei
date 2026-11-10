@@ -143,37 +143,55 @@ def filter_pool(items, pool, miss_ids=None):
     return list(items)
 
 
-def _weight_item(item, pool, miss_ids=None):
+def _weight_item(item, pool, miss_ids=None, recent=None):
     if pool in ("rot", "rot_hard"):
         # Everything that says "this is slipping": decay, leech history, and
         # recent Sensei misses.
         missed = 15 if item["subject_id"] in (miss_ids or ()) else 0
-        return int((item.get("decay_score") or 0) + leech_score(item) * 20 + missed)
-    if pool == "leeches":
-        return (leech_score(item) * 20) + (item.get("decay_score") or 0)
-    if pool == "burned":
+        weight = int((item.get("decay_score") or 0) + leech_score(item) * 20 + missed)
+    elif pool == "leeches":
+        weight = (leech_score(item) * 20) + (item.get("decay_score") or 0)
+    elif pool == "burned":
         # Burned items are often high-accuracy; still prefer the softest ones.
         accuracy = item.get("accuracy")
         softness = 0 if accuracy is None else max(0, 100 - accuracy)
-        return softness + 1
-    if pool == "misses":
-        return (item.get("decay_score") or 0) + 12
-    return item.get("decay_score") or 0
+        weight = softness + 1
+    elif pool == "misses":
+        weight = (item.get("decay_score") or 0) + 12
+    else:
+        weight = item.get("decay_score") or 0
+    # Rest what was just answered right; bring a fresh miss back sooner.
+    # "My misses" / "Retry misses" skip this so those rounds stay on the notebook.
+    if recent and pool != "misses":
+        state = recent.get(item["subject_id"])
+        if state == "right":
+            weight *= 0.2
+        elif state == "missed":
+            weight *= 1.5
+    return weight
 
 
-def sample_for_pool(items, count, rng, pool, miss_ids=None):
+def sample_for_pool(items, count, rng, pool, miss_ids=None, recent=None):
     miss_ids = set(miss_ids or ())
     tagged = []
     for item in items:
         clone = dict(item)
-        clone["decay_score"] = _weight_item(item, pool, miss_ids)
+        # Keep the un-rested weight for the question card. The recent rule
+        # only changes how likely the item is to be picked.
+        clone["_show"] = _weight_item(item, pool, miss_ids)
+        clone["decay_score"] = _weight_item(item, pool, miss_ids, recent)
         tagged.append(clone)
     if pool == "rot_hard" and len(tagged) >= count * 2:
         # Hard mode: only the softer half of what you know.
         weights = sorted(item["decay_score"] for item in tagged)
         median = weights[len(weights) // 2]
         tagged = [item for item in tagged if item["decay_score"] >= median] or tagged
-    return sample_weighted(tagged, min(count, len(tagged)), rng)
+    picked = sample_weighted(tagged, min(count, len(tagged)), rng)
+    for item in picked:
+        if recent and pool != "misses":
+            item["decay_score"] = item["_show"]
+        item.pop("_show", None)
+    return picked
 
 
 def _fetch_miss_ids(db):
@@ -310,6 +328,8 @@ def build_drill(
     now=None,
     object_types=None,
     miss_ids=None,
+    recent=None,
+    last_missed=None,
 ):
     kind = (kind or "recall").strip().casefold()
     pool = (pool or "decay").strip().casefold()
@@ -343,9 +363,13 @@ def build_drill(
     items = filter_pool(items, pool, miss_ids=miss_ids)
     if not items:
         raise ValueError(_empty_pool_message(pool, min_level, max_level))
+    for item in items:
+        missed_half = (last_missed or {}).get(item["subject_id"])
+        if missed_half in ("meaning", "reading"):
+            item["last_missed_prompt"] = missed_half
 
     sample_size = min(len(items), max(count * 3, count + 8))
-    candidates = sample_for_pool(items, sample_size, rng, pool, miss_ids)
+    candidates = sample_for_pool(items, sample_size, rng, pool, miss_ids, recent)
 
     questions = []
     used = set()
@@ -484,6 +508,48 @@ def persist_drill(db, drill):
     return drill
 
 
+def _fetch_recent(db):
+    """subject_id -> 'right' or 'missed' from the last 20 hours. Later answers win."""
+    try:
+        rows = db.execute(
+            """
+            select subject_id, is_correct
+            from drill_questions
+            where answered_at > now() - interval '20 hours'
+              and is_correct is not null
+            order by answered_at asc, position asc
+            """,
+            fetch=True,
+        ) or []
+    except Exception:
+        return {}
+    recent = {}
+    for subject_id, is_correct in rows:
+        recent[subject_id] = "right" if is_correct else "missed"
+    return recent
+
+
+def _fetch_last_missed(db):
+    """subject_id -> the half of the most recent notebook miss."""
+    try:
+        rows = db.execute(
+            """
+            select subject_id, last_prompt_type
+            from drill_misses
+            where miss_count > 0
+              and last_prompt_type is not null
+            """,
+            fetch=True,
+        ) or []
+    except Exception:
+        return {}
+    return {
+        row[0]: row[1]
+        for row in rows
+        if row[1] in ("meaning", "reading")
+    }
+
+
 def start_drill(
     db,
     min_level,
@@ -497,7 +563,10 @@ def start_drill(
 ):
     ensure_schema(db)
     object_types = _expand_object_types(object_types)
-    miss_ids = _fetch_miss_ids(db) if pool == "misses" else None
+    pool_name = (pool or "decay").strip().casefold()
+    miss_ids = _fetch_miss_ids(db) if pool_name == "misses" else None
+    # The notebook rounds are supposed to be the misses. Don't rest them.
+    recent = None if pool_name == "misses" else _fetch_recent(db)
     rows = fetch_pool(db, min_level, max_level, object_types=object_types)
     drill = build_drill(
         rows,
@@ -510,6 +579,8 @@ def start_drill(
         seed=seed,
         object_types=object_types,
         miss_ids=miss_ids,
+        recent=recent,
+        last_missed=_fetch_last_missed(db),
     )
     persist_drill(db, drill)
     return public_drill(drill)
@@ -828,15 +899,14 @@ def _requeue_miss(db, session_id, qid, meta, rng=None):
     }
 
 
-def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_up=False):
-    ensure_schema(db)
+def _question_row(db, session_id, question_id):
     rows = db.execute(
         """
         select q.id, q.subject_id, q.prompt_type, q.characters, q.object_type,
                q.level, q.correct_answer, q.accepted_answers, q.choices,
                q.correct_index, q.answered_index, q.answered_text,
                sess.kind, sess.score_correct, sess.score_total,
-               sess.question_count, sess.combo_best, sess.meta
+               sess.question_count, sess.combo_best, sess.meta, q.is_correct
         from drill_questions q
         join drill_sessions sess on sess.id = q.session_id
         where q.id = %s::uuid and q.session_id = %s::uuid
@@ -846,10 +916,17 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
     )
     if not rows:
         raise ValueError("question not found")
+    return rows[0]
+
+
+def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_up=False):
+    ensure_schema(db)
     (qid, subject_id, prompt_type, characters, object_type, level,
      correct_answer, accepted_raw, choices_raw, correct_index,
      answered_index, answered_text, kind, score_correct, score_total,
-     question_count, combo_best, meta) = rows[0]
+     question_count, combo_best, meta, _already) = _question_row(
+        db, session_id, question_id,
+    )
 
     if answered_index is not None or answered_text is not None:
         raise ValueError("question already answered")
@@ -907,6 +984,7 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
         is_correct = False
         almost = False
 
+    combo_before = combo
     if is_correct:
         combo += 1
     else:
@@ -938,6 +1016,16 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
         requeued = _requeue_miss(db, session_id, qid, meta)
         if requeued:
             question_count = int(question_count) + 1
+    if not is_correct:
+        # Enough to undo a typed slip: the combo it broke, and the comeback it spawned.
+        meta.setdefault("slips", {})[str(qid)] = {
+            "combo": combo_before,
+            "counted": not is_retry,
+            "gave_up": bool(gave_up),
+            "timed_out": bool(timed_out),
+            "typed": kind in ("recall", "speed") and prompt_type in ("meaning", "reading"),
+            "requeued": requeued["id"] if requeued else None,
+        }
     finished = failed or answered >= int(question_count)
     db.execute(
         """
@@ -993,6 +1081,139 @@ def grade_drill(db, session_id, question_id, choice_index=None, text=None, gave_
             "finished": finished,
         },
         "verdict": _sensei_verdict(new_correct, new_total) if finished else None,
+        "undoable": bool(
+            not is_correct
+            and kind in ("recall", "speed")
+            and prompt_type in ("meaning", "reading")
+            and not is_retry
+            and not gave_up
+            and not timed_out
+            and meta.get("allowed_misses") is None
+        ),
+    }
+
+
+def _drop_requeue(db, meta, origin_qid, requeued_id):
+    """Delete the unanswered comeback copy. Returns whether a row went away."""
+    if not requeued_id:
+        return False
+    rows = db.execute(
+        """
+        select answered_index, answered_text, is_correct
+        from drill_questions
+        where id = %s::uuid
+        /* requeue_state */
+        """,
+        [requeued_id],
+        fetch=True,
+    )
+    if not rows:
+        return False
+    answered_index, answered_text, is_correct = rows[0]
+    if answered_index is not None or answered_text is not None or is_correct is not None:
+        return False
+    db.execute(
+        "delete from drill_questions where id = %s::uuid",
+        [requeued_id],
+    )
+    origin = (meta.get("retry_of") or {}).get(str(origin_qid), str(origin_qid))
+    counts = meta.get("requeues") or {}
+    if counts.get(origin, 0) > 0:
+        counts[origin] -= 1
+        if counts[origin] <= 0:
+            counts.pop(origin, None)
+    (meta.get("retry_of") or {}).pop(str(requeued_id), None)
+    return True
+
+
+def undo_miss(db, session_id, question_id):
+    """Turn one typed slip back into a hit. Gate rounds and give-ups stay put."""
+    ensure_schema(db)
+    (qid, subject_id, prompt_type, characters, object_type, level,
+     correct_answer, accepted_raw, choices_raw, correct_index,
+     answered_index, answered_text, kind, score_correct, score_total,
+     question_count, combo_best, meta, is_correct) = _question_row(
+        db, session_id, question_id,
+    )
+    del prompt_type, characters, object_type, level, correct_answer
+    del accepted_raw, choices_raw, correct_index, kind
+    if answered_index is None and answered_text is None:
+        raise ValueError("question is not answered")
+    meta = _parse_json(meta) if not isinstance(meta, dict) else (meta or {})
+    undone = meta.setdefault("undone", [])
+    if str(qid) in undone:
+        raise ValueError("already undone")
+    if meta.get("allowed_misses") is not None:
+        raise ValueError("undo is off for this round")
+    slip = (meta.get("slips") or {}).get(str(qid)) or {}
+    if not slip.get("typed") or not slip.get("counted"):
+        raise ValueError("only a typed miss can be undone")
+    if slip.get("gave_up") or slip.get("timed_out"):
+        raise ValueError("that miss stays")
+    if is_correct:
+        raise ValueError("nothing to undo")
+
+    removed = _drop_requeue(db, meta, qid, slip.get("requeued"))
+    if removed:
+        question_count = int(question_count) - 1
+    combo = int(slip.get("combo") or 0) + 1
+    combo_best = max(int(combo_best or 0), combo)
+    meta["combo"] = combo
+    undone.append(str(qid))
+    new_correct = int(score_correct) + 1
+    new_total = int(score_total)
+    answered = int(meta.get("answered") or new_total)
+    finished = bool(meta.get("failed")) or answered >= int(question_count)
+    now = datetime.now(timezone.utc).isoformat()
+    db.execute(
+        """
+        update drill_questions
+        set is_correct = true
+        where id = %s::uuid
+        """,
+        [qid],
+    )
+    db.execute(
+        """
+        update drill_sessions
+        set score_correct = %s, score_total = %s, combo_best = %s, meta = %s::jsonb,
+            question_count = %s,
+            finished_at = case when %s then %s else finished_at end
+        where id = %s::uuid
+        """,
+        [
+            new_correct, new_total, combo_best, json.dumps(meta), question_count,
+            finished, now if finished else None, session_id,
+        ],
+    )
+    try:
+        db.execute(
+            """
+            update drill_misses
+            set miss_count = greatest(miss_count - 1, 0),
+                hit_count = hit_count + 1
+            where subject_id = %s
+            /* undo_notebook */
+            """,
+            [subject_id],
+        )
+    except Exception:
+        pass
+    return {
+        "question_id": question_id,
+        "correct": True,
+        "undone": True,
+        "combo": combo,
+        "combo_best": combo_best,
+        "removed_id": slip.get("requeued") if removed else None,
+        "score": {
+            "correct": new_correct,
+            "total": new_total,
+            "answered": answered,
+            "question_count": int(question_count),
+            "remaining": max(0, int(question_count) - answered),
+            "finished": finished,
+        },
     }
 
 

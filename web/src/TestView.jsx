@@ -2,7 +2,29 @@ import { useEffect, useRef, useState } from "react";
 import { toKana } from "wanakana";
 import { api } from "./api.js";
 import InspectCard from "./InspectCard.jsx";
+import { MissHint } from "./Mnemonic.jsx";
+import { SoundToggle, soundEnabled } from "./sound.jsx";
 import { T } from "./Term.jsx";
+
+const SETUP_KEY = "kani-drill-setup";
+const FORMAT_NAME = { recall: "Recall", mc: "Multiple choice", reverse: "Reverse", speed: "Blitz" };
+const POOL_NAME = { decay: "Decaying", due: "Due now", leeches: "Leeches", burned: "Ghosts", misses: "My misses" };
+
+function readSetup() {
+  try {
+    return JSON.parse(localStorage.getItem(SETUP_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberSetup(setup) {
+  try {
+    localStorage.setItem(SETUP_KEY, JSON.stringify(setup));
+  } catch {
+    /* private mode */
+  }
+}
 
 const FORMATS = [
   { id: "recall", label: "Type it", hint: "Same muscle as a real review", term: "recall" },
@@ -69,16 +91,30 @@ function ChipRow({ label, options, value, onChange, disabled }) {
   );
 }
 
-function Recap({ score, verdict, comboBest, misses, onAgain, onRetryMisses, onHome, onInspect }) {
+function Recap({
+  score, verdict, comboBest, misses, cleared, weekAccuracy,
+  onAgain, onRetryMisses, onRead, onHome, onInspect,
+}) {
+  const round = score.total ? Math.round((score.correct / score.total) * 100) : 0;
+  const retry = misses.length > 0;
   return (
     <div className="recap">
       <div className="recap-score">
         <span className="eyebrow">Session</span>
         <div className="chars">{score.correct}/{score.total}</div>
         <p className="verdict">{verdict || "Round complete."}</p>
+        <p className="note">
+          {round}% this round
+          {weekAccuracy != null ? ` · ${weekAccuracy}% over the last 7 days` : ""}
+        </p>
         {comboBest ? (
           <p className="note">
             Best <T k="combo">combo</T> {comboBest}
+          </p>
+        ) : null}
+        {cleared?.length ? (
+          <p className="note">
+            Came back and cleared: {cleared.map((item) => item.characters || item.correct_answer).join("、")}
           </p>
         ) : null}
       </div>
@@ -109,12 +145,19 @@ function Recap({ score, verdict, comboBest, misses, onAgain, onRetryMisses, onHo
         </p>
       )}
       <div className="hero-actions">
-        <button className="primary-btn" onClick={onAgain}>Again</button>
-        {misses.length ? (
-          <button className="ghost-btn" onClick={onRetryMisses}>Retry misses</button>
+        {retry ? (
+          <button className="primary-btn" onClick={onRetryMisses}>Retry misses</button>
+        ) : (
+          <button className="primary-btn" onClick={onRead}>Read today's page</button>
+        )}
+      </div>
+      <div className="recap-links">
+        <button type="button" className="quiet-link" onClick={onAgain}>Again</button>
+        {retry ? (
+          <button type="button" className="quiet-link" onClick={onRead}>Today's reading</button>
         ) : null}
         {onHome ? (
-          <button className="ghost-btn" onClick={onHome}>Home</button>
+          <button type="button" className="quiet-link" onClick={onHome}>Home</button>
         ) : null}
       </div>
     </div>
@@ -132,21 +175,24 @@ export default function TestView({
   autoStart = false,
   finishNote,
   onHome,
+  onRead,
   onFocus,
 }) {
   const query = readQuery();
+  const [saved] = useState(readSetup);
   const suggested = data?.decay?.summary?.suggested_levels || [];
   const fallbackMin = suggested.length ? Math.min(...suggested) : 14;
   const fallbackMax = suggested.length ? Math.max(...suggested) : 18;
-  const defaultMin = query.min ?? fallbackMin;
-  const defaultMax = query.max ?? fallbackMax;
+  const defaultMin = query.min ?? saved.minLevel ?? fallbackMin;
+  const defaultMax = query.max ?? saved.maxLevel ?? fallbackMax;
 
-  const [kind, setKind] = useState(query.kind || defaultKind);
-  const [pool, setPool] = useState(query.pool || defaultPool);
+  const [kind, setKind] = useState(query.kind || saved.kind || defaultKind);
+  const [pool, setPool] = useState(query.pool || saved.pool || defaultPool);
   const [minLevel, setMinLevel] = useState(defaultMin);
   const [maxLevel, setMaxLevel] = useState(defaultMax);
-  const [count, setCount] = useState(query.count || defaultCount);
-  const [mode, setMode] = useState("both");
+  const [count, setCount] = useState(query.count || saved.count || defaultCount);
+  const [mode, setMode] = useState(saved.mode || "both");
+  const [showSetup, setShowSetup] = useState(false);
   const [session, setSession] = useState(null);
   const [index, setIndex] = useState(0);
   const [feedback, setFeedback] = useState(null);
@@ -161,6 +207,8 @@ export default function TestView({
   const [hint, setHint] = useState("");
   const [wrapUp, setWrapUp] = useState(false);
   const [scoreboard, setScoreboard] = useState({ correct: 0, total: 0 });
+  const [cleared, setCleared] = useState([]);
+  const [weekAccuracy, setWeekAccuracy] = useState(null);
   const composing = useRef(false);
   const inputRef = useRef(null);
   const autoStarted = useRef(false);
@@ -181,11 +229,34 @@ export default function TestView({
   }, [inSession, onFocus]);
 
   useEffect(() => {
-    if (!session) {
-      setMinLevel(defaultMin);
-      setMaxLevel(defaultMax);
-    }
-  }, [defaultMin, defaultMax, session]);
+    // A saved setup, or a link that names the levels, wins over the suggestion.
+    if (session || query.min != null || saved.minLevel != null) return;
+    setMinLevel(defaultMin);
+    setMaxLevel(defaultMax);
+  }, [defaultMin, defaultMax, session, query.min, saved.minLevel]);
+
+  useEffect(() => {
+    const url = feedback?.reveal?.audio_url || feedback?.inspect?.audio_url;
+    if (!url || !soundEnabled() || (session?.kind || kind) === "speed") return undefined;
+    const audio = new Audio(url);
+    audio.play().catch(() => {});
+    return () => {
+      audio.pause();
+    };
+  }, [feedback, session?.kind, kind]);
+
+  useEffect(() => {
+    if (!showRecap) return undefined;
+    let live = true;
+    api.drillStats()
+      .then((stats) => {
+        if (live) setWeekAccuracy(stats?.week_accuracy ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [showRecap]);
 
   async function start(overrides = {}) {
     setBusy(true);
@@ -198,16 +269,29 @@ export default function TestView({
     setHint("");
     setWrapUp(false);
     setScoreboard({ correct: 0, total: 0 });
+    setCleared([]);
+    setWeekAccuracy(null);
     setSession(null);
     try {
       const nextKind = overrides.kind || kind;
       const nextPool = overrides.pool || pool;
+      const nextMin = Number(overrides.min_level ?? minLevel);
+      const nextMax = Number(overrides.max_level ?? maxLevel);
+      const nextCount = Number(overrides.count ?? (nextKind === "speed" ? 24 : count));
       const modes =
         mode === "both" ? ["meaning", "reading"] : mode === "meaning" ? ["meaning"] : ["reading"];
+      rememberSetup({
+        kind: nextKind,
+        pool: nextPool,
+        minLevel: nextMin,
+        maxLevel: nextMax,
+        count: nextKind === "speed" ? count : nextCount,
+        mode,
+      });
       const drill = await api.startDrill({
-        min_level: Number(overrides.min_level ?? minLevel),
-        max_level: Number(overrides.max_level ?? maxLevel),
-        count: Number(overrides.count ?? (nextKind === "speed" ? 24 : count)),
+        min_level: nextMin,
+        max_level: nextMax,
+        count: nextCount,
         modes,
         kind: nextKind,
         pool: nextPool,
@@ -277,6 +361,16 @@ export default function TestView({
       correct: result.score?.correct || 0,
       total: result.score?.total || 0,
     });
+    if (result.correct && result.retry_of) {
+      setCleared((list) => [
+        ...list,
+        {
+          characters: result.reveal?.characters || current.characters,
+          correct_answer: result.correct_answer,
+          subject_id: result.reveal?.subject_id,
+        },
+      ]);
+    }
     if (!result.correct) {
       bump();
       if (result.retry_of) return;
@@ -365,6 +459,48 @@ export default function TestView({
     }
   }
 
+  async function undoSlip() {
+    if (!session || !question || !feedback?.undoable || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.undoDrill({
+        session_id: session.session_id,
+        question_id: question.id,
+      });
+      const subjectId = feedback.reveal?.subject_id;
+      setFeedback((prev) => ({
+        ...prev,
+        ...result,
+        correct: true,
+        undone: true,
+        requeued: null,
+        undoable: false,
+      }));
+      setCombo(result.combo || 0);
+      setScoreboard({
+        correct: result.score?.correct || 0,
+        total: result.score?.total || 0,
+      });
+      setMisses((list) => list.filter((miss) => miss.subject_id !== subjectId));
+      if (result.removed_id) {
+        setSession((prev) => {
+          if (!prev) return prev;
+          const questions = prev.questions.filter((item) => item.id !== result.removed_id);
+          return {
+            ...prev,
+            questions,
+            question_count: result.score?.question_count ?? questions.length,
+          };
+        });
+      }
+    } catch (err) {
+      setError(err.message || "Could not take that back");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function next() {
     if (!session) return;
     if (feedback?.score?.finished || timeUp) {
@@ -395,6 +531,11 @@ export default function TestView({
       if (feedback) {
         // A held Enter must not submit and skip the answer in one press.
         if (event.repeat) return;
+        if ((event.key === "u" || event.key === "U") && feedback.undoable) {
+          event.preventDefault();
+          undoSlip();
+          return;
+        }
         if (event.key === "Enter" || event.key === " " || event.key === "n") {
           event.preventDefault();
           next();
@@ -450,6 +591,25 @@ export default function TestView({
 
       {!session ? (
         <div className="surface">
+          {!showSetup ? (
+            <>
+              <p className="setup-line">{[
+                FORMAT_NAME[kind] || "Recall",
+                POOL_NAME[pool] || "Decaying",
+                String(minLevel) === String(maxLevel) ? `level ${minLevel}` : `levels ${minLevel}–${maxLevel}`,
+                kind === "speed" ? "60 seconds" : `${count} questions`,
+                mode === "meaning" ? "meanings" : mode === "reading" ? "readings" : "",
+              ].filter(Boolean).join(" · ")}</p>
+              <div className="hero-actions">
+                <button className="primary-btn" onClick={() => start()} disabled={busy}>
+                  {busy ? "Building…" : "Start"}
+                </button>
+                <button type="button" className="ghost-btn" onClick={() => setShowSetup(true)}>Change setup</button>
+              </div>
+            </>
+          ) : null}
+          {showSetup ? (
+            <>
           <ChipRow label="Format" options={FORMATS} value={kind} onChange={setKind} />
           <ChipRow label="Pool" options={POOLS} value={pool} onChange={setPool} />
           <div className="controls">
@@ -497,7 +657,10 @@ export default function TestView({
             <button className="primary-btn" onClick={() => start()} disabled={busy}>
               {busy ? "Building…" : kind === "speed" ? "Start blitz" : "Begin"}
             </button>
+            <button type="button" className="text-btn" onClick={() => setShowSetup(false)}>Hide setup</button>
           </div>
+            </>
+          ) : null}
           <p className="note">
             Enter checks · 1–4 picks a choice · ? skips · Space continues.
             {suggested.length ? ` Decay Map suggests ${suggested.join(", ")}.` : ""}
@@ -511,6 +674,8 @@ export default function TestView({
             verdict={feedback?.verdict || (timeUp ? "Time. That's the round." : finishNote)}
             comboBest={feedback?.combo_best || combo}
             misses={misses}
+            cleared={cleared}
+            weekAccuracy={weekAccuracy}
             onInspect={openRelated}
             onAgain={() => start()}
             onRetryMisses={() => {
@@ -518,6 +683,7 @@ export default function TestView({
               setKind("recall");
               start({ kind: "recall", pool: "misses" });
             }}
+            onRead={onRead}
             onHome={onHome}
           />
           {inspect ? <InspectCard card={inspect} onOpenRelated={openRelated} /> : null}
@@ -543,7 +709,10 @@ export default function TestView({
                 ) : null}
                 {secondsLeft != null ? ` · ${secondsLeft}s` : ""}
               </div>
-              <button type="button" className="text-btn" onClick={exit}>Exit</button>
+              <span className="meter-tools">
+                {session.kind !== "speed" ? <SoundToggle /> : null}
+                <button type="button" className="text-btn" onClick={exit}>Exit</button>
+              </span>
             </div>
           </div>
 
@@ -652,15 +821,17 @@ export default function TestView({
           ) : (
             <div className={`reveal ${feedback.correct ? "ok" : "nope"}`}>
               <strong>
-                {feedback.correct
-                  ? feedback.almost
-                    ? "Close enough. Watch the spelling."
-                    : (combo >= 3 ? `Combo ${combo}.` : "Solid.")
-                  : feedback.almost
-                    ? "Almost."
-                    : feedback.gave_up
-                      ? "Passed."
-                      : "Not yet."}
+                {feedback.undone
+                  ? "Counted. It was a slip."
+                  : feedback.correct
+                    ? feedback.almost
+                      ? "Close enough. Watch the spelling."
+                      : (combo >= 3 ? `Combo ${combo}.` : "Solid.")
+                    : feedback.almost
+                      ? "Almost."
+                      : feedback.gave_up
+                        ? "Passed."
+                        : "Not yet."}
               </strong>
               {" "}
               {feedback.reveal?.meaning || feedback.correct_answer}
@@ -675,11 +846,19 @@ export default function TestView({
               {feedback.requeued ? (
                 <div className="meta">It comes back in a few. Clear it to finish the round.</div>
               ) : null}
+              {!feedback.correct && inspect ? (
+                <MissHint card={inspect} promptType={question?.prompt_type} />
+              ) : null}
               {inspect ? <InspectCard card={inspect} onOpenRelated={openRelated} /> : null}
-              <div style={{ marginTop: "0.85rem" }}>
+              <div className="reveal-actions">
                 <button className="primary-btn" onClick={next}>
                   {feedback.score?.finished ? "Finish" : "Next"}
                 </button>
+                {feedback.undoable ? (
+                  <button type="button" className="ghost-btn" onClick={undoSlip} disabled={busy}>
+                    I knew it <kbd>U</kbd>
+                  </button>
+                ) : null}
               </div>
             </div>
           )}

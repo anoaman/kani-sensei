@@ -3,6 +3,8 @@ import { toKana } from "wanakana";
 import { api } from "./api.js";
 import InspectCard from "./InspectCard.jsx";
 import { Glyph } from "./LevelPages.jsx";
+import { MissHint, Mnemonic } from "./Mnemonic.jsx";
+import { SoundToggle, soundEnabled } from "./sound.jsx";
 
 const TYPE_LABEL = { radical: "Radical", kanji: "Kanji", vocabulary: "Vocabulary", kana_vocabulary: "Vocabulary" };
 const RETRY_GAP = 3;
@@ -33,22 +35,6 @@ function shuffle(list) {
 function typeOf(item) {
   const type = item?.type || item?.object_type;
   return type === "kana_vocabulary" ? "vocabulary" : type;
-}
-
-// WaniKani mnemonics mark terms with <radical>, <kanji>, <vocabulary>, <reading>, <ja>.
-function Mnemonic({ text }) {
-  if (!text) return null;
-  const parts = [];
-  const re = /<(radical|kanji|vocabulary|reading|ja|meaning)>(.*?)<\/\1>/gs;
-  let last = 0;
-  let match;
-  while ((match = re.exec(text))) {
-    if (match.index > last) parts.push(text.slice(last, match.index));
-    parts.push(<mark key={match.index} className={`mn-${match[1]}`}>{match[2].replace(/<[^>]+>/g, "")}</mark>);
-    last = re.lastIndex;
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  return <p className="mnemonic">{parts.map((part) => (typeof part === "string" ? part.replace(/<[^>]+>/g, "") : part))}</p>;
 }
 
 function LessonCard({ card, index, total }) {
@@ -132,6 +118,16 @@ export default function CourseSession({ level, mode, daily = false, go, onFocus 
     onFocus?.(phase === "quiz" || phase === "learn");
     return () => onFocus?.(false);
   }, [phase, onFocus]);
+
+  useEffect(() => {
+    const url = feedback?.inspect?.audio_url;
+    if (!url || !soundEnabled()) return undefined;
+    const audio = new Audio(url);
+    audio.play().catch(() => {});
+    return () => {
+      audio.pause();
+    };
+  }, [feedback]);
 
   async function load() {
     setPhase("loading");
@@ -284,10 +280,13 @@ export default function CourseSession({ level, mode, daily = false, go, onFocus 
           <h2>{title}</h2>
         </div>
         {phase === "quiz" ? (
-          <p className="muted">
-            {daily && today ? <><b>{today.done}/{today.total}</b> today · </> : null}
-            {remaining} items left · {stats.correct}/{stats.answered} correct
-          </p>
+          <div className="muted session-tools">
+            <span>
+              {daily && today ? <><b>{today.done}/{today.total}</b> today · </> : null}
+              {remaining} items left · {stats.correct}/{stats.answered} correct
+            </span>
+            <SoundToggle />
+          </div>
         ) : null}
       </div>
       {error ? <div className="error">{error}</div> : null}
@@ -368,6 +367,9 @@ export default function CourseSession({ level, mode, daily = false, go, onFocus 
                 ? (feedback.inspect?.readings || []).map((r) => r.reading).join(" / ")
                 : (feedback.inspect?.meanings || []).join(", ")}
               {feedback.submitted && (!feedback.correct || feedback.almost) ? <div className="meta">You said {feedback.submitted}</div> : null}
+              {!feedback.correct && feedback.inspect ? (
+                <MissHint card={feedback.inspect} promptType={current.prompt_type} />
+              ) : null}
               {!feedback.correct ? (
                 <div className="meta">
                   {feedback.mode === "check" ? "Into Relearn it goes. Here's the card." : "It comes back in a few. This miss counts."}

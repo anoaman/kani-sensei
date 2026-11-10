@@ -146,6 +146,7 @@ class FakeDrillDb:
             "question_count": count, "combo_best": 0, "meta": {},
         }
         self.questions = {}
+        self.notebook = {"miss": 0, "hit": 0}
         self.subject = (
             [{"meaning": m} for m in meanings],
             [{"reading": r} for r in readings],
@@ -169,8 +170,23 @@ class FakeDrillDb:
         sess = self.session
         if "meaning_taken" in sql or "meaning_blacklist" in sql:
             return []
+        if "undo_notebook" in sql:
+            self.notebook["miss"] = max(0, self.notebook["miss"] - 1)
+            self.notebook["hit"] += 1
+            return None
+        if "insert into drill_misses" in sql:
+            if "last_missed_at" in sql:
+                self.notebook["miss"] += 1
+            else:
+                self.notebook["hit"] += 1
+            return None
         if "from wk_subjects" in sql:
             return [self.subject]
+        if "requeue_state" in sql:
+            q = self.questions.get(params[0])
+            if not q:
+                return []
+            return [(q.get("answered_index"), q.get("answered_text"), q.get("is_correct"))]
         if "max(position)" in sql:
             q = self.questions[params[1]]
             top = max(item["position"] for item in self.questions.values())
@@ -180,15 +196,19 @@ class FakeDrillDb:
                 q["correct_answer"], q["accepted"], q["choices"],
                 q["correct_index"], top,
             )]
+        if "delete from drill_questions" in sql:
+            self.questions.pop(params[0], None)
+            return None
         if fetch:
             q = self.questions[params[0]]
-            answered = "x" if q["answered"] else None
+            answered = q.get("answered_text") if q["answered"] else None
             return [(
                 params[0], q["subject_id"], q["prompt_type"], q["characters"],
                 q["object_type"], q["level"], q["correct_answer"], q["accepted"],
-                q["choices"], q["correct_index"], None, answered,
+                q["choices"], q["correct_index"], q.get("answered_index"), answered,
                 sess["kind"], sess["score_correct"], sess["score_total"],
                 sess["question_count"], sess["combo_best"], dict(sess["meta"]),
+                q.get("is_correct"),
             )]
         if sql.strip().startswith("insert into drill_questions"):
             (new_id, _sid, position, _subj, prompt_type, _chars, _ot, _lvl,
@@ -197,7 +217,14 @@ class FakeDrillDb:
             self.add_question(new_id, position, prompt_type, json.loads(accepted),
                               json.loads(choices), correct_index)
         elif "update drill_questions" in sql:
-            self.questions[params[-1]]["answered"] = True
+            q = self.questions[params[-1]]
+            if "answered_text" in sql:
+                q["answered"] = True
+                q["answered_index"] = params[0]
+                q["answered_text"] = params[1]
+                q["is_correct"] = params[2]
+            elif "is_correct = true" in sql:
+                q["is_correct"] = True
         elif "update drill_sessions" in sql:
             import json
             if "score_correct" in sql:
@@ -354,6 +381,68 @@ class DrillRequeueTests(unittest.TestCase):
         self.assertEqual(new["choices"][new["correct_index"]], "Big")
 
 
+class UndoMissTests(unittest.TestCase):
+    def test_a_typed_slip_comes_back_off_the_score(self):
+        from shared.drill import grade_drill, undo_miss
+        db = FakeDrillDb("meaning", ["Big"], count=2)
+        db.add_question("q2", 1, "meaning", ["Big"])
+        first = grade_drill(db, "s1", "q1", text="big")
+        self.assertEqual(first["combo"], 1)
+        miss = grade_drill(db, "s1", "q2", text="small")
+        self.assertTrue(miss["undoable"])
+        self.assertTrue(miss["requeued"])
+        self.assertEqual(db.notebook["miss"], 1)
+        undone = undo_miss(db, "s1", "q2")
+        self.assertTrue(undone["undone"])
+        self.assertEqual(undone["combo"], 2)
+        self.assertEqual((undone["score"]["correct"], undone["score"]["total"]), (2, 2))
+        self.assertIsNotNone(undone["removed_id"])
+        self.assertNotIn(undone["removed_id"], db.questions)
+        self.assertTrue(db.questions["q2"]["is_correct"])
+        # The first answer was already a hit; the slip moves from miss to hit.
+        self.assertEqual(db.notebook, {"miss": 0, "hit": 2})
+        with self.assertRaises(ValueError) as ctx:
+            undo_miss(db, "s1", "q2")
+        self.assertIn("already undone", str(ctx.exception))
+
+    def test_give_up_timeout_choice_and_gate_cannot_be_undone(self):
+        from datetime import datetime, timedelta, timezone
+        from shared.drill import grade_drill, undo_miss
+
+        gave_up = FakeDrillDb("meaning", ["Big"], count=1)
+        grade_drill(gave_up, "s1", "q1", gave_up=True)
+        with self.assertRaises(ValueError) as ctx:
+            undo_miss(gave_up, "s1", "q1")
+        self.assertIn("stays", str(ctx.exception))
+        self.assertEqual(gave_up.session["score_correct"], 0)
+
+        timed = FakeDrillDb("meaning", ["Big"], count=1)
+        late = (datetime.now(timezone.utc) - timedelta(seconds=40)).isoformat()
+        timed.session["meta"] = {"question_seconds": 15, "seen": {"q1": late}}
+        grade_drill(timed, "s1", "q1", text="big")
+        with self.assertRaises(ValueError):
+            undo_miss(timed, "s1", "q1")
+        self.assertEqual(timed.session["score_correct"], 0)
+
+        chosen = FakeDrillDb("meaning", ["Big"], kind="mc", count=1)
+        chosen.questions["q1"]["choices"] = ["Big", "Small"]
+        chosen.questions["q1"]["correct_index"] = 0
+        grade_drill(chosen, "s1", "q1", choice_index=1)
+        with self.assertRaises(ValueError) as ctx:
+            undo_miss(chosen, "s1", "q1")
+        self.assertIn("typed", str(ctx.exception))
+
+        gate = FakeDrillDb("meaning", ["Big"], count=5)
+        gate.session["meta"] = {"allowed_misses": 1}
+        miss = grade_drill(gate, "s1", "q1", text="small")
+        self.assertFalse(miss["undoable"])
+        with self.assertRaises(ValueError) as ctx:
+            undo_miss(gate, "s1", "q1")
+        self.assertIn("off for this round", str(ctx.exception))
+        self.assertEqual(gate.session["score_total"], 1)
+        self.assertEqual(gate.session["score_correct"], 0)
+
+
 class GateRulesInDrillTests(unittest.TestCase):
     def test_a_near_miss_does_not_use_an_allowed_miss(self):
         from shared.drill import grade_drill
@@ -412,3 +501,64 @@ class RotPoolTests(unittest.TestCase):
         items = [{"subject_id": i, "decay_score": i} for i in range(40)]
         picked = sample_for_pool(items, 10, random.Random(1), "rot_hard")
         self.assertTrue(all(item["decay_score"] >= 20 for item in picked))
+
+
+class RestRuleTests(unittest.TestCase):
+    def test_a_recent_right_rests_and_a_miss_comes_back_harder(self):
+        from shared.drill import _weight_item
+        item = {"subject_id": 7, "decay_score": 40}
+        self.assertAlmostEqual(_weight_item(item, "decay", recent={7: "right"}), 8)
+        self.assertAlmostEqual(_weight_item(item, "decay", recent={7: "missed"}), 60)
+        self.assertEqual(_weight_item(item, "decay"), 40)
+
+    def test_miss_pools_skip_the_rest_rule(self):
+        from shared.drill import _weight_item
+        item = {"subject_id": 1, "decay_score": 10}
+        rested = {1: "right"}
+        # "My misses" and "Retry misses" are both the misses pool.
+        self.assertEqual(_weight_item(item, "misses", recent=rested), _weight_item(item, "misses"))
+        self.assertEqual(_weight_item(item, "misses", recent=rested), 22)
+
+    def test_sampling_prefers_the_fresh_miss_over_the_rested_item(self):
+        import random
+        from shared.drill import sample_for_pool
+        items = [
+            {"subject_id": 1, "decay_score": 50},
+            {"subject_id": 2, "decay_score": 50},
+        ]
+        recent = {1: "right", 2: "missed"}
+        picks = [
+            sample_for_pool(items, 1, random.Random(seed), "decay", recent=recent)[0]["subject_id"]
+            for seed in range(40)
+        ]
+        self.assertGreater(picks.count(2), picks.count(1))
+        # The card still shows the real decay, not the rested weight.
+        shown = sample_for_pool(items, 1, random.Random(0), "decay", recent=recent)[0]
+        self.assertEqual(shown["decay_score"], 50)
+
+    def test_recent_answers_keep_the_latest_within_twenty_hours(self):
+        from shared.drill import _fetch_recent
+
+        class DB:
+            def execute(self, sql, params=None, fetch=False):
+                self.sql = sql
+                return [(1, False), (1, True), (2, False)]
+
+        db = DB()
+        self.assertEqual(_fetch_recent(db), {1: "right", 2: "missed"})
+        self.assertIn("20 hours", db.sql)
+
+    def test_a_recent_missed_half_is_asked_more_often(self):
+        rows = [
+            pool_row(
+                i, 5, f"字{i}", f"Meaning{i}", f"よみ{i}",
+                correct=10, incorrect=10, meaning_incorrect=10, object_type="kanji",
+            )
+            for i in range(30)
+        ]
+        drill = build_drill(
+            rows, 5, 5, count=20, kind="recall", seed=3,
+            object_types=["kanji"], last_missed={i: "meaning" for i in range(30)},
+        )
+        meanings = sum(1 for q in drill["questions"] if q["prompt_type"] == "meaning")
+        self.assertGreater(meanings, len(drill["questions"]) / 2)

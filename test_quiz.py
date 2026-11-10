@@ -7,8 +7,10 @@ from shared.quiz import (
     QUIZ_POOL_QUERY,
     QUIZ_POOL_QUERY_LEGACY,
     build_quiz,
+    choose_prompt_type,
     enrich_pool_row,
     normalize_object_types,
+    pick_distractors,
     sample_weighted,
 )
 
@@ -28,6 +30,7 @@ def decay_row(subject_id, level, correct, incorrect, stage=1, due=True, prev_sta
 def pool_row(
     subject_id, level, characters, meaning, reading,
     correct=5, incorrect=5, stage=2, object_type="vocabulary",
+    meaning_incorrect=0,
 ):
     meanings = [{"meaning": meaning, "primary": True, "accepted_answer": True}]
     readings = (
@@ -38,7 +41,7 @@ def pool_row(
     return (
         subject_id, level, object_type, characters, meaning,
         meanings, readings,
-        correct, 0, correct, incorrect,
+        correct, meaning_incorrect, correct, incorrect,
         stage, NOW - timedelta(days=1), None, None,
     )
 
@@ -215,6 +218,123 @@ class QuizTests(unittest.TestCase):
         self.assertIn("distinct on (subject_id)", sql)
         self.assertNotIn("lateral", sql)
         self.assertNotIn("lateral", QUIZ_POOL_QUERY_LEGACY.lower())
+        self.assertIn("visually_similar_subject_ids", QUIZ_POOL_QUERY)
+        self.assertIn("visually_similar_subject_ids", QUIZ_POOL_QUERY_LEGACY)
+
+    def test_enrich_reads_lookalike_ids(self):
+        row = pool_row(1, 5, "未", "Not Yet", "み") + ([9, "12", "nope"],)
+        item = enrich_pool_row(row, now=NOW)
+        self.assertEqual(item["similar_ids"], [9, 12])
+        plain = enrich_pool_row(pool_row(2, 5, "末", "End", "まつ"), now=NOW)
+        self.assertEqual(plain["similar_ids"], [])
+
+
+def _half_item(**extra):
+    item = {
+        "primary_meaning": "Big",
+        "primary_reading": "だい",
+        "meaning_correct": 10,
+        "meaning_incorrect": 10,
+        "reading_correct": 10,
+        "reading_incorrect": 10,
+    }
+    item.update(extra)
+    return item
+
+
+class WeakerHalfTests(unittest.TestCase):
+    def _picks(self, item, n=400):
+        import random
+        return [
+            choose_prompt_type(item, ["meaning", "reading"], random.Random(seed))
+            for seed in range(n)
+        ]
+
+    def test_a_clearly_weaker_half_is_asked_three_times_in_four(self):
+        item = _half_item(
+            meaning_correct=20, meaning_incorrect=1,
+            reading_correct=4, reading_incorrect=16,
+        )
+        reading = self._picks(item).count("reading")
+        self.assertGreater(reading, 260)
+        self.assertLess(reading, 340)
+
+    def test_equal_halves_stay_a_coin_flip(self):
+        meaning = self._picks(_half_item()).count("meaning")
+        self.assertGreater(meaning, 150)
+        self.assertLess(meaning, 250)
+
+    def test_a_recent_miss_makes_that_half_the_weaker_one(self):
+        item = _half_item(last_missed_prompt="meaning")
+        meaning = self._picks(item).count("meaning")
+        self.assertGreater(meaning, 260)
+        self.assertLess(meaning, 340)
+        # The notebook column name is accepted too.
+        aliased = _half_item(last_prompt_type="reading")
+        reading = self._picks(aliased).count("reading")
+        self.assertGreater(reading, 260)
+
+    def test_one_available_half_is_used_as_is(self):
+        import random
+        item = _half_item(primary_reading=None)
+        self.assertEqual(
+            choose_prompt_type(item, ["meaning", "reading"], random.Random(0)),
+            "meaning",
+        )
+        self.assertIsNone(choose_prompt_type(item, ["reading"], random.Random(0)))
+
+
+def _choice_item(subject_id, characters, meaning, reading, level, decay, similar=()):
+    return {
+        "subject_id": subject_id,
+        "type": "kanji",
+        "level": level,
+        "characters": characters,
+        "primary_meaning": meaning,
+        "meanings": [meaning],
+        "primary_reading": reading,
+        "readings": [reading],
+        "decay_score": decay,
+        "similar_ids": list(similar),
+    }
+
+
+class DistractorOrderTests(unittest.TestCase):
+    def test_lookalike_kanji_lead_the_choices(self):
+        import random
+        target = _choice_item(1, "未", "Not Yet", "み", 5, 10, similar=[2, 3])
+        pool = [
+            target,
+            _choice_item(2, "末", "End", "まつ", 30, 1),
+            _choice_item(3, "木", "Tree", "き", 28, 1),
+            _choice_item(4, "本", "Book", "ほん", 5, 90),
+        ]
+        got = pick_distractors(target, pool, "meaning", random.Random(0), k=3)
+        self.assertEqual(got, ["End", "Tree", "Book"])
+
+    def test_a_lookalike_missing_from_the_pool_is_skipped(self):
+        import random
+        target = _choice_item(1, "未", "Not Yet", "み", 5, 10, similar=[99, 2])
+        pool = [
+            target,
+            _choice_item(2, "末", "End", "まつ", 30, 1),
+            _choice_item(4, "本", "Book", "ほん", 5, 40),
+            _choice_item(5, "元", "Origin", "げん", 6, 10),
+        ]
+        got = pick_distractors(target, pool, "meaning", random.Random(1), k=3)
+        self.assertEqual(got[0], "End")
+        self.assertEqual(set(got[1:]), {"Book", "Origin"})
+
+    def test_shared_kana_readings_come_before_an_unrelated_neighbor(self):
+        import random
+        target = _choice_item(1, "神", "God", "かみ", 5, 10)
+        pool = [
+            target,
+            _choice_item(2, "酒", "Sake", "さけ", 5, 90),
+            _choice_item(3, "角", "Corner", "かど", 20, 1),
+        ]
+        got = pick_distractors(target, pool, "reading", random.Random(0), k=1)
+        self.assertEqual(got, ["かど"])
 
 
 if __name__ == "__main__":

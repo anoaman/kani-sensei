@@ -41,6 +41,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  undoDrill: (body) =>
+    request("/api/drill?action=undo", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  drillStats: () => request("/api/drill?action=stats"),
   getDrill: (sessionId) =>
     request(`/api/drill?session_id=${encodeURIComponent(sessionId)}`),
   levels: () => request("/api/course?action=levels"),

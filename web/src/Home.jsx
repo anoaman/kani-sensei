@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toKana } from "wanakana";
 import { api } from "./api.js";
+import { InspectDrawer } from "./InspectCard.jsx";
 import KanjiField from "./KanjiField.jsx";
 
 const TYPE_NAME = { r: "Radical", k: "Kanji", v: "Vocabulary" };
@@ -329,6 +330,57 @@ export function QuickQuiz({ kicker, meta, start, onFinished, onSeen, done, autoF
   );
 }
 
+function Notebook({ go }) {
+  const [stats, setStats] = useState(null);
+  const [openId, setOpenId] = useState(null);
+  useEffect(() => {
+    api.drillStats().then(setStats).catch(() => setStats(null));
+  }, []);
+  if (!stats) return null;
+  const notes = stats.notebook || [];
+  if (!stats.week_total && !notes.length) return null;
+  const levels = notes.map((item) => item.level).filter((level) => level);
+  const min = levels.length ? Math.min(...levels) : 1;
+  const max = levels.length ? Math.max(...levels) : 60;
+  return (
+    <section className="notebook-strip">
+      <div className="notebook-head">
+        <div>
+          <p className="kicker">Sensei notebook</p>
+          <strong>{stats.week_accuracy != null ? `${stats.week_accuracy}% this week` : "No rounds yet this week"}</strong>
+        </div>
+        {notes.length ? (
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={() => go("session", {
+              pool: "misses",
+              kind: "recall",
+              go: 1,
+              min,
+              max,
+              types: "radical,kanji,vocabulary",
+            })}
+          >
+            Drill these
+          </button>
+        ) : null}
+      </div>
+      {notes.length ? (
+        <div className="glyph-row">
+          {notes.map((item) => (
+            <button key={item.subject_id} type="button" className="glyph-chip" onClick={() => setOpenId(item.subject_id)}>
+              <span className="glyph" lang="ja">{item.characters || "・"}</span>
+              <span className="meta">{item.miss_count} {item.miss_count === 1 ? "miss" : "misses"}</span>
+            </button>
+          ))}
+        </div>
+      ) : <p className="muted">Nothing in the notebook. A clean week.</p>}
+      {openId ? <InspectDrawer subjectId={openId} onClose={() => setOpenId(null)} /> : null}
+    </section>
+  );
+}
+
 function Sky({ sky, levels, go }) {
   const [filter, setFilter] = useState("all");
   const [hover, setHover] = useState(null);
@@ -455,6 +507,7 @@ export default function Home({ go }) {
         </div>
         <KanjiField sky={sky} onOpenLevel={(level) => go(`/level/${level}`)} />
       </section>
+      <Notebook go={go} />
       <Sky sky={sky} levels={levels} go={go} />
       <section className="warmup-section">
         <div className="warmup-copy">

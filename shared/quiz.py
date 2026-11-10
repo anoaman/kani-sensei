@@ -34,7 +34,8 @@ select
     r.meaning_correct, r.meaning_incorrect,
     r.reading_correct, r.reading_incorrect,
     a.srs_stage, a.available_at, a.burned_at,
-    prev.prev_srs_stage
+    prev.prev_srs_stage,
+    coalesce(s.raw->'visually_similar_subject_ids', '[]'::jsonb)
 from wk_subjects s
 join wk_review_stats r on r.subject_id = s.id
 left join wk_assignments a on a.subject_id = s.id
@@ -59,7 +60,8 @@ select
     r.meaning_correct, r.meaning_incorrect,
     r.reading_correct, r.reading_incorrect,
     a.srs_stage, a.available_at, a.burned_at,
-    null::integer as prev_srs_stage
+    null::integer as prev_srs_stage,
+    coalesce(s.raw->'visually_similar_subject_ids', '[]'::jsonb)
 from wk_subjects s
 join wk_review_stats r on r.subject_id = s.id
 left join wk_assignments a on a.subject_id = s.id
@@ -144,10 +146,25 @@ def _primary_reading(readings_raw):
     return accepted[0] if accepted else None
 
 
+def _similar_ids(value):
+    parsed = value if isinstance(value, list) else _parse_json(value)
+    if not isinstance(parsed, list):
+        return []
+    out = []
+    for item in parsed:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def enrich_pool_row(row, now=None):
+    row = tuple(row)
+    similar_raw = row[15] if len(row) > 15 else []
     (subject_id, level, object_type, characters, primary_meaning, meanings_raw,
      readings_raw, meaning_correct, meaning_incorrect, reading_correct,
-     reading_incorrect, srs_stage, available_at, burned_at, prev_srs_stage) = row
+     reading_incorrect, srs_stage, available_at, burned_at, prev_srs_stage) = row[:15]
 
     classified = classify_item((
         subject_id, level, object_type, characters, primary_meaning,
@@ -170,6 +187,7 @@ def enrich_pool_row(row, now=None):
         "meaning_incorrect": meaning_incorrect or 0,
         "reading_correct": reading_correct or 0,
         "reading_incorrect": reading_incorrect or 0,
+        "similar_ids": _similar_ids(similar_raw),
     }
 
 
@@ -201,7 +219,16 @@ def _normalize(text):
     return (text or "").strip().casefold()
 
 
+def _push_choice(text, seen, banned, out):
+    norm = _normalize(text)
+    if not norm or norm in seen or norm in banned:
+        return
+    seen.add(norm)
+    out.append(text)
+
+
 def pick_distractors(target, pool, prompt_type, rng, k=3):
+    """Fill choices look-alike first, then similar-sounding readings, then nearby levels."""
     if prompt_type == "meaning":
         correct = target["primary_meaning"]
         key = "primary_meaning"
@@ -213,6 +240,7 @@ def pick_distractors(target, pool, prompt_type, rng, k=3):
 
     if not correct:
         return []
+    banned.add(_normalize(correct))
 
     same_type = [
         item for item in pool
@@ -221,26 +249,52 @@ def pick_distractors(target, pool, prompt_type, rng, k=3):
         and item.get(key)
         and _normalize(item[key]) not in banned
     ]
+    by_id = {item["subject_id"]: item for item in same_type}
+    seen = set()
+    priority = []
 
-    # Prefer nearby levels, then anything else.
+    for raw_id in target.get("similar_ids") or []:
+        try:
+            sid = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        item = by_id.get(sid)
+        if item:
+            _push_choice(item[key], seen, banned, priority)
+
+    # Readings: anything that starts or ends on the same kana is a closer trap
+    # than a random word from the next level.
+    if prompt_type != "meaning" and correct:
+        head, tail = correct[0], correct[-1]
+        shares = [
+            item for item in same_type
+            if item[key][0] == head or item[key][-1] == tail
+        ]
+        shares.sort(key=lambda item: (
+            abs(item["level"] - target["level"]),
+            -item["decay_score"],
+            item["characters"] or "",
+        ))
+        for item in shares:
+            _push_choice(item[key], seen, banned, priority)
+
     same_type.sort(key=lambda item: (
         abs(item["level"] - target["level"]),
         -item["decay_score"],
         item["characters"] or "",
     ))
-    candidates = []
-    seen = set()
+    nearby = []
     for item in same_type:
-        text = item[key]
-        norm = _normalize(text)
-        if norm in seen or norm in banned:
-            continue
-        seen.add(norm)
-        candidates.append(text)
-        if len(candidates) >= max(12, k * 4):
+        _push_choice(item[key], seen, banned, nearby)
+        if len(priority) + len(nearby) >= max(12, k * 4):
             break
 
-    return rng.sample(candidates, min(k, len(candidates)))
+    if len(priority) >= k:
+        return priority[:k]
+    need = k - len(priority)
+    if not nearby or need <= 0:
+        return priority
+    return priority + rng.sample(nearby, min(need, len(nearby)))
 
 
 def build_question(item, pool, prompt_type, rng):
@@ -277,7 +331,26 @@ def build_question(item, pool, prompt_type, rng):
     }
 
 
+# A half this far ahead on misses is "clearly weaker" and is asked 3 times in 4.
+# A recent drill miss on that half counts as a quarter-point of extra weakness.
+_CLEAR_GAP = 0.15
+_WEAKER_SHARE = 0.75
+_RECENT_MISS_BUMP = 0.25
+
+
+def _half_miss_rate(item, half):
+    wrong = int(item.get(f"{half}_incorrect") or 0)
+    right = int(item.get(f"{half}_correct") or 0)
+    total = wrong + right
+    rate = (wrong / total) if total else 0.0
+    last = item.get("last_missed_prompt") or item.get("last_prompt_type")
+    if last == half:
+        rate += _RECENT_MISS_BUMP
+    return rate
+
+
 def choose_prompt_type(item, modes, rng):
+    """Pick a half. A clearly weaker one is asked about 3 times in 4; a tie stays even."""
     available = []
     if "meaning" in modes and item.get("primary_meaning"):
         available.append("meaning")
@@ -285,7 +358,14 @@ def choose_prompt_type(item, modes, rng):
         available.append("reading")
     if not available:
         return None
-    return rng.choice(available)
+    if len(available) == 1:
+        return available[0]
+    rates = {half: _half_miss_rate(item, half) for half in available}
+    weaker = max(available, key=rates.get)
+    stronger = next(half for half in available if half != weaker)
+    if rates[weaker] - rates[stronger] < _CLEAR_GAP:
+        return rng.choice(available)
+    return weaker if rng.random() < _WEAKER_SHARE else stronger
 
 
 def build_quiz(

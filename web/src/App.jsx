@@ -263,7 +263,7 @@ export default function App() {
       </header>
       {error ? <div className="error global-error">{error}</div> : null}
       {view === "dojo" ? <Home go={navigate} /> : null}
-      {view === "session" ? <TestView key={window.location.search} data={data} title="Practice session" blurb="One focused round. Finish clean, then decide whether to continue." onHome={() => navigate("dojo")} onFocus={setFocus} /> : null}
+      {view === "session" ? <TestView key={window.location.search} data={data} title="Practice session" blurb="One focused round. Finish clean, then decide whether to continue." onHome={() => navigate("dojo")} onRead={() => navigate("/read/today")} onFocus={setFocus} /> : null}
       {view === "levels" ? <LevelIndex go={navigate} /> : null}
       {view === "level" ? <LevelPage key={pathname} level={levelFromPath(pathname)} go={navigate} /> : null}
       {view === "course" ? (
