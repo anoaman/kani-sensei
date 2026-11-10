@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
+import { Mnemonic } from "./Mnemonic.jsx";
 import { ReadingTerm, SrsTerm, T } from "./Term.jsx";
 
 function GlyphChip({ item, onOpen }) {
   if (!item) return null;
+  const type = item.type === "kana_vocabulary" ? "vocabulary" : item.type;
+  const className = `glyph-chip${type ? ` t-${type}` : ""}`;
   const body = (
     <>
       <span className="glyph">{item.characters || "・"}</span>
@@ -11,19 +14,25 @@ function GlyphChip({ item, onOpen }) {
     </>
   );
   if (!onOpen || !item.subject_id) {
-    return <div className="glyph-chip">{body}</div>;
+    return <div className={className}>{body}</div>;
   }
   return (
-    <button type="button" className="glyph-chip" onClick={() => onOpen(item.subject_id)}>
+    <button type="button" className={className} onClick={() => onOpen(item.subject_id)}>
       {body}
     </button>
   );
 }
 
-export default function InspectCard({ card, onOpenRelated }) {
-  const [showMnemonic, setShowMnemonic] = useState(false);
-  const [showEnglish, setShowEnglish] = useState(false);
+export default function InspectCard({ card, onOpenRelated, mnemonicOpen = false }) {
+  const [showMnemonic, setShowMnemonic] = useState(mnemonicOpen);
+  const [showEnglish, setShowEnglish] = useState(mnemonicOpen);
   const audioRef = useRef(null);
+
+  useEffect(() => {
+    setShowMnemonic(mnemonicOpen);
+    setShowEnglish(mnemonicOpen);
+  }, [card?.subject_id, mnemonicOpen]);
+
   if (!card) return null;
 
   const readings = card.readings || [];
@@ -151,10 +160,10 @@ export default function InspectCard({ card, onOpenRelated }) {
             )}
           </button>
           {showMnemonic ? (
-            <div className="mnemonic">
-              {card.mnemonic.meaning ? <p>{card.mnemonic.meaning.replace(/<[^>]+>/g, "")}</p> : null}
-              {card.mnemonic.reading ? <p>{card.mnemonic.reading.replace(/<[^>]+>/g, "")}</p> : null}
-            </div>
+            <>
+              {card.mnemonic.meaning ? <Mnemonic text={card.mnemonic.meaning} /> : null}
+              {card.mnemonic.reading ? <Mnemonic text={card.mnemonic.reading} /> : null}
+            </>
           ) : null}
         </div>
       ) : null}

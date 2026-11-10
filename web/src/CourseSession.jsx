@@ -193,8 +193,8 @@ export default function CourseSession({ level, mode, daily = false, go, onFocus 
       }
       secondLook.current = false;
       setHint("");
-      // A missed check is the moment to see the card, so open it.
-      setDetails(!result.correct && result.mode === "check");
+      // A miss opens the card. A hit leaves it closed.
+      setDetails(!result.correct);
       if (result.daily) setToday((prev) => ({ ...prev, ...result.daily, streak: result.daily.streak ?? prev?.streak }));
       setFeedback(result);
       if (!result.correct) bump();
@@ -386,7 +386,9 @@ export default function CourseSession({ level, mode, daily = false, go, onFocus 
                 </div>
               ) : null}
               {feedback.level_passed ? <div className="unlock-note">Level {level} passed.</div> : null}
-              {details && feedback.inspect ? <InspectCard card={feedback.inspect} /> : null}
+              {details && feedback.inspect ? (
+                <InspectCard card={feedback.inspect} mnemonicOpen={!feedback.correct} />
+              ) : null}
               <div className="reveal-actions">
                 <button className="primary-btn" onClick={next}>Continue <kbd>Enter</kbd></button>
                 {feedback.inspect ? <button className="ghost-btn" onClick={() => setDetails(!details)}>{details ? "Hide details" : "Item details"}</button> : null}
