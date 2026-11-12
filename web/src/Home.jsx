@@ -57,9 +57,28 @@ function TodayRead({ go }) {
   );
 }
 
-function TodayTarget({ today, go }) {
+const DAY_SIZES = [5, 10, 15, 20];
+
+function TodayTarget({ today, go, onToday }) {
   const { done, total, completed, streak } = today;
+  const [busy, setBusy] = useState(false);
+  const [sizeError, setSizeError] = useState("");
+  const selected = DAY_SIZES.includes(today.size) ? today.size : 20;
   const left = total - done;
+
+  async function choose(size) {
+    if (busy || size === selected) return;
+    setBusy(true);
+    setSizeError("");
+    try {
+      onToday(await api.setDailySize(size));
+    } catch (err) {
+      setSizeError(err.message || "Could not change today's target");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className={`today-target${completed ? " complete" : ""}`}>
       <div className="today-head">
@@ -70,9 +89,24 @@ function TodayTarget({ today, go }) {
         <b>{done}</b><span>/ {total}</span>
         <em>{completed ? "✓ cleared" : `${left} to go`}</em>
       </div>
-      <div className="today-pips" style={{ gridTemplateColumns: `repeat(${total}, 1fr)` }} aria-label={`${done} of ${total} done`}>
+      <div className="today-pips" style={{ gridTemplateColumns: `repeat(${Math.max(total, 1)}, 1fr)` }} aria-label={`${done} of ${total} done`}>
         {Array.from({ length: total }, (_, i) => <i key={i} className={i < done ? "on" : ""} />)}
       </div>
+      <div className="today-sizes" role="group" aria-label="Items in a day">
+        {DAY_SIZES.map((size) => (
+          <button
+            key={size}
+            type="button"
+            className={size === selected ? "active" : ""}
+            aria-pressed={size === selected}
+            disabled={busy}
+            onClick={() => choose(size)}
+          >
+            {size}
+          </button>
+        ))}
+      </div>
+      {sizeError ? <p className="today-size-error">{sizeError}</p> : null}
       <div className="today-foot">
         <span>
           {streak
@@ -488,7 +522,7 @@ export default function Home({ go }) {
               ? <>You've brought back <b>{known.toLocaleString()}</b> of {total.toLocaleString()} items across {startedCount} {startedCount === 1 ? "level" : "levels"}.</>
               : <>{total.toLocaleString()} items from levels 1–{levels.length} are still in there somewhere. Let's find out how many.</>}
           </p>
-          {today?.total ? <TodayTarget today={today} go={go} /> : null}
+          {today?.total ? <TodayTarget today={today} go={go} onToday={setToday} /> : null}
           <TodayRead go={go} />
           {next && !(today?.total && !today.completed) ? (
             <div className="home-next">

@@ -5,8 +5,9 @@ GET  /api/course?level=N                  level page: items by type + course sum
 GET  /api/course?action=queue&level=N&mode=check|relearn|reviews|ahead
 GET  /api/course?action=daily[&summary=1] today's set: remaining items, progress, streak
 GET  /api/course?action=sky               every item as a dot, for the home map
-POST /api/course?action=start   {level}                     start/restart a level
-POST /api/course?action=answer  {subject_id, prompt_type, text | gave_up, second_look}
+POST /api/course?action=start       {level}                     start/restart a level
+POST /api/course?action=answer      {subject_id, prompt_type, text | gave_up, second_look}
+POST /api/course?action=daily-size  {size}                      5, 10, 15, or 20 for today's set
 """
 
 from http.server import BaseHTTPRequestHandler
@@ -26,7 +27,7 @@ from shared.course import (
     start_level,
 )
 from shared.auth import read_json_body
-from shared.daily import fetch_daily
+from shared.daily import fetch_daily, set_daily_size
 from shared.http_util import optional_int, respond
 from shared.neon import NeonClient
 
@@ -84,6 +85,8 @@ class handler(BaseHTTPRequestHandler):
             with db.reuse():
                 if action == "start":
                     result = start_level(db, _level(body.get("level")))
+                elif action == "daily-size":
+                    result = set_daily_size(db, body.get("size"))
                 elif action == "answer":
                     subject_id = body.get("subject_id")
                     if subject_id is None:

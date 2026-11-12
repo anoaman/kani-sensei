@@ -63,6 +63,8 @@ export const api = {
   gateFinish: (gateId) =>
     request("/api/gate?action=finish", { method: "POST", body: JSON.stringify({ gate_id: gateId }) }),
   daily: (summary = false) => request(`/api/course?action=daily${summary ? "&summary=1" : ""}`),
+  setDailySize: (size) =>
+    request("/api/course?action=daily-size", { method: "POST", body: JSON.stringify({ size }) }),
   courseAnswer: (body) =>
     request("/api/course?action=answer", { method: "POST", body: JSON.stringify(body) }),
   inspect: (subjectId) =>
